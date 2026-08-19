@@ -1,5 +1,7 @@
 # P0-2. Закрыть бесконечную индексируемую пагинацию
 
+> **Реализация:** [`../src/lib/seo/pagination.ts`](../src/lib/seo/pagination.ts) — собрано и покрыто тестами (`fixes/tests/pagination.test.ts`). Пример страницы: [`../src/app/catalog-page-example.tsx`](../src/app/catalog-page-example.tsx). Ниже — разбор находки и обоснование.
+
 ## Что сейчас
 
 `/catalog/{slug}?page=N` при любом N за пределом диапазона отдаёт **HTTP 200, пустой список товаров и `robots: index, follow` с self-canonical**:

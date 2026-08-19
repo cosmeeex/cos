@@ -1,5 +1,7 @@
 # P1-5 / P1-6 / P2-8. Внутренняя перелинковка
 
+> **Реализация:** [`../src/lib/seo/brands.ts`](../src/lib/seo/brands.ts), [`../src/components/BrandChip.tsx`](../src/components/BrandChip.tsx), [`../src/components/CatalogPagination.tsx`](../src/components/CatalogPagination.tsx), [`../src/lib/seo/url.ts`](../src/lib/seo/url.ts), [`../src/app/brand/page.tsx`](../src/app/brand/page.tsx). Ниже — разбор находок.
+
 ## 1. Чипы брендов ведут в robots-заглушки
 
 На одной странице `/catalog/gel-laki` — **54 ссылки (32 уникальных)** на URL, закрытые в robots.txt:

@@ -1,5 +1,7 @@
 # P1-3. LCP-изображение главной
 
+> **Реализация:** заголовки — [`../nginx/cosmex-cache.conf`](../nginx/cosmex-cache.conf) и [`../src/next.config.ts`](../src/next.config.ts). Ниже — разбор находки и правка hero через `next/image`.
+
 ## Что сейчас
 
 ```

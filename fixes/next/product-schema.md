@@ -1,5 +1,7 @@
 # P2-10. Пробелы в Product-разметке
 
+> **Реализация:** [`../src/lib/seo/product-jsonld.ts`](../src/lib/seo/product-jsonld.ts) — собрано и покрыто тестами (`fixes/tests/product-jsonld.test.ts`). Ниже — разбор находки.
+
 ## Что отдаётся сейчас
 
 ```json

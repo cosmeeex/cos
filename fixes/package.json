@@ -1,0 +1,10 @@
+{
+  "name": "cosmex-seo-fixes",
+  "private": true,
+  "type": "module",
+  "description": "Готовые к переносу модули и тесты по находкам docs/seo-audit.md",
+  "scripts": {
+    "test": "node --experimental-strip-types --test 'tests/*.test.ts'",
+    "check": "../tools/seo-check.sh"
+  }
+}

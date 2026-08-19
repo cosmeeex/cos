@@ -1,0 +1,20 @@
+{
+  "//": [
+    "Флаги, нужные для модулей из fixes/src. Слить с существующим tsconfig.json проекта.",
+    "",
+    "allowImportingTsExtensions: модули импортируют друг друга с явным '.ts'",
+    "(import { absolute } from './url.ts'). Это нужно, чтобы тесты запускались",
+    "штатным раннером Node без сборки и без внешних зависимостей:",
+    "  node --experimental-strip-types --test 'tests/*.test.ts'",
+    "Next.js такие импорты понимает; флаг требует noEmit: true, который в Next",
+    "и так стоит. Если в проекте принят другой стиль — уберите расширения",
+    "в src/ и запускайте тесты через tsx."
+  ],
+  "compilerOptions": {
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+    "paths": {
+      "@/*": ["./src/*"]
+    }
+  }
+}
