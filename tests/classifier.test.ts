@@ -74,10 +74,15 @@ test("waveByTnved выбирает самый специфичный префи�
   assert.equal(waveByTnved("9999999999"), null);
 });
 
-test("парфюмированный мист — особый случай с проверкой декларации", () => {
+test("мист (неспиртовой, подтверждено владельцем) → косметика, не парфюмерия", () => {
   const c = classify({ name: "COSMEX NOIR Parfumed Mist Amber Rouge по мотивам Baccarat 250 мл" });
   assert.equal(c.special, "perfumed-mist");
-  assert.ok(c.reasons.some((r) => r.includes("деклара")));
+  assert.equal(c.group, "beauty");
+  assert.equal(c.wave?.id, "beauty-2025-w2");
+  assert.ok(c.confidence >= 0.7);
+  assert.ok(c.reasons.some((r) => r.includes("неспиртов")));
+  // Спиртовой мист по ТН ВЭД остаётся парфюмерией.
+  assert.equal(classify({ name: "Мист спиртовой", tnved: "3303001000" }).wave?.id, "perfumery-2020");
 });
 
 test("наборы помечаются как особый случай", () => {

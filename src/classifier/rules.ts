@@ -115,7 +115,7 @@ export interface ClassifiedItem {
   /** Особый случай, требующий ручного решения. */
   special:
     | null
-    | "perfumed-mist" // парфюмированный мист: 3303 или 3307? нужна декларация
+    | "perfumed-mist" // парфюмированный мист: у Cosmex неспиртовые → косметика (3307/3304), не 3303
     | "set" // набор из нескольких товаров
     | "sample" // пробник/семпл
     | "tester" // тестер
@@ -243,10 +243,11 @@ export function classify(item: {
     if (rule.keywords.test(text)) {
       const wave = waveById(rule.wave)!;
       reasons.push(rule.reason);
-      // Парфюмированный мист без ТН ВЭД: не утверждаем 3303, но требуем проверки.
+      // Мисты Cosmex неспиртовые (подтверждено владельцем 19.08.2026) —
+      // это косметика (3307/3304), не парфюмерия. Спиртовой мист был бы 3303.
       if (special === "perfumed-mist" && wave.group !== "perfumery") {
         reasons.push(
-          "парфюмированный мист: проверить декларацию — при спиртовой основе это ТН ВЭД 3303 (маркировка уже обязательна)",
+          "мист: неспиртовой (подтверждено) → косметика; точный ТН ВЭД (3307/3304) проставить из декларации. Спиртовые мисты, если появятся, — это 3303 (парфюмерия)",
         );
       }
       return { group: wave.group, wave, confidence: rule.confidence, reasons, special };
@@ -254,8 +255,10 @@ export function classify(item: {
   }
 
   if (special === "perfumed-mist") {
-    reasons.push("парфюмированный мист: волна зависит от состава (3303 или 3307) — нужна декларация соответствия");
-    return { group: "beauty", wave: waveById("beauty-2025-w2"), confidence: 0.5, reasons, special };
+    reasons.push(
+      "неспиртовой парфюмированный мист (подтверждено 19.08.2026) — косметика, волна 2 (3307); проставить ТН ВЭД из декларации",
+    );
+    return { group: "beauty", wave: waveById("beauty-2025-w2"), confidence: 0.75, reasons, special };
   }
 
   reasons.push("не удалось определить по названию и категории — нужна ручная проверка и заполнение ТН ВЭД");
