@@ -1,0 +1,367 @@
+/**
+ * CLI интеграции маркировки. Запуск: node src/cli.ts <команда> [аргументы]
+ *
+ * Команды:
+ *   audit                    — аудит ассортимента МойСклад, отчёты в reports/
+ *   audit --fix              — + проставить trackingType/ТН ВЭД (уважает DRY_RUN)
+ *   plan-residuals           — план маркировки товара без кодов (Заказы КМ)
+ *   plan-residuals --create  — + создать документы «Заказ КМ» в МойСклад
+ *   reconcile                — сверка остатков МойСклад ↔ Честный знак
+ *   distance                 — контроль вывода из оборота по интернет-заказам
+ *   scan <код>               — проверить скан кода маркировки
+ *   labels <файл> [zpl|tspl|csv] — этикетки из файла с кодами (по строке на код)
+ *   setup-webhooks <url>     — включить вебхуки МойСклад на наш сервер
+ *   serve                    — запустить сервер (вебхуки + панель)
+ */
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
+import { join } from "node:path";
+import { loadConfig, requireFor } from "./core/config.ts";
+import { MoyskladClient, DOCS_WITH_TRACKING_CODES, idFromHref } from "./moysklad/client.ts";
+import { auditAll, renderAuditMarkdown, extractGtins, type AuditableProduct } from "./classifier/audit.ts";
+import { classify, obligationOn } from "./classifier/rules.ts";
+import { planResiduals, renderResidualPlanMarkdown, type ResidualItem } from "./residuals/plan.ts";
+import { toZpl, toTspl, toCsv } from "./residuals/labels.ts";
+import { parseDataMatrix } from "./core/gs1.ts";
+import { reconcile, renderReconcileMarkdown, type ChzStockLine } from "./reconcile/stocks.ts";
+import { checkDistanceRetirement, type DemandSummary, type RetireOrderSummary } from "./guard/distance.ts";
+import { TrueApiClient } from "./crpt/trueapi.ts";
+import { ExternalSigner, StubSigner } from "./crpt/signer.ts";
+import { HttpClient } from "./core/http.ts";
+import { startServer } from "./server.ts";
+
+const REPORTS_DIR = "reports";
+
+function ensureReports(): void {
+  if (!existsSync(REPORTS_DIR)) mkdirSync(REPORTS_DIR, { recursive: true });
+}
+
+function needMoysklad(): MoyskladClient {
+  const cfg = loadConfig();
+  const missing = requireFor(cfg, "moysklad");
+  if (missing.length) {
+    console.error(`Не хватает настроек МойСклад: ${missing.join(", ")}. Скопируйте .env.example в .env и заполните.`);
+    process.exit(2);
+  }
+  return new MoyskladClient(cfg.moysklad, (l) => process.env.DEBUG && console.error(l));
+}
+
+function makeTrueApi(): TrueApiClient | null {
+  const cfg = loadConfig();
+  if (requireFor(cfg, "trueapi").length > 0) return null;
+  const signer = cfg.crpt.signerCmd
+    ? new ExternalSigner(cfg.crpt.signerCmd, cfg.crpt.certThumbprint)
+    : new StubSigner();
+  return new TrueApiClient(new HttpClient(cfg.crpt.trueApiUrl), signer, (l) => console.error(l));
+}
+
+async function fetchAuditable(ms: MoyskladClient): Promise<AuditableProduct[]> {
+  const products = await ms.allProducts();
+  return products.map((p) => ({
+    id: p.id ?? idFromHref(p.meta.href),
+    name: p.name ?? "",
+    pathName: p.pathName,
+    tnved: p.tnved,
+    trackingType: p.trackingType,
+    archived: p.archived,
+    barcodes: p.barcodes as Array<Record<string, string | undefined>>,
+  }));
+}
+
+async function cmdAudit(fix: boolean): Promise<void> {
+  const cfg = loadConfig();
+  const ms = needMoysklad();
+  console.log("Выгружаю товары из МойСклад…");
+  const products = await fetchAuditable(ms);
+  console.log(`Товаров: ${products.length}. Классифицирую…`);
+  const report = auditAll(products);
+  ensureReports();
+  writeFileSync(join(REPORTS_DIR, "audit.json"), JSON.stringify(report, null, 2));
+  writeFileSync(join(REPORTS_DIR, "audit.md"), renderAuditMarkdown(report));
+  console.log(
+    `Готово: ${report.total} карточек, маркируемых ${report.tracked}, с проблемами ${report.rows.length}.\n` +
+      `Отчёты: ${REPORTS_DIR}/audit.md, ${REPORTS_DIR}/audit.json`,
+  );
+
+  if (!fix) return;
+  const fixable = report.rows.filter((r) =>
+    r.issues.some((i) => i.code === "TRACKING_TYPE_MISSING") && r.classified.confidence >= 0.75,
+  );
+  console.log(`К исправлению (уверенность ≥0.75): ${fixable.length} карточек`);
+  if (cfg.dryRun) {
+    console.log("DRY_RUN=true — изменения не отправляются. Список: reports/audit-fix-plan.json");
+    writeFileSync(
+      join(REPORTS_DIR, "audit-fix-plan.json"),
+      JSON.stringify(
+        fixable.map((r) => ({
+          id: r.product.id,
+          name: r.product.name,
+          set: { trackingType: r.classified.wave!.trackingType },
+        })),
+        null,
+        2,
+      ),
+    );
+    return;
+  }
+  let done = 0;
+  for (const r of fixable) {
+    await ms.updateProduct(r.product.id, { trackingType: r.classified.wave!.trackingType });
+    done++;
+    if (done % 50 === 0) console.log(`…${done}/${fixable.length}`);
+  }
+  console.log(`Обновлено карточек: ${done}`);
+}
+
+async function cmdPlanResiduals(create: boolean): Promise<void> {
+  const cfg = loadConfig();
+  const ms = needMoysklad();
+  console.log("Выгружаю товары и остатки…");
+  const products = await fetchAuditable(ms);
+  const stock = await ms.stockAll("stockMode=positiveOnly");
+  const stockByName = new Map(stock.map((s) => [s.name ?? "", s.stock]));
+
+  const items: ResidualItem[] = [];
+  const now = new Date();
+  for (const p of products) {
+    if (p.archived) continue;
+    const c = classify(p);
+    if (!c.wave || !obligationOn(c.wave, now).markingMandatory) continue;
+    const qty = stockByName.get(p.name) ?? 0;
+    if (qty <= 0) continue;
+    items.push({
+      productId: p.id,
+      name: p.name,
+      gtin: extractGtins(p)[0] ?? null,
+      quantity: Math.floor(qty),
+      trackingType: c.wave.trackingType,
+      // По умолчанию — маркировка остатков; для собственного импорта СТМ
+      // менеджер меняет способ на FOREIGN в созданном документе.
+      emissionType: "REMAINS",
+    });
+  }
+  const plan = planResiduals(items);
+  ensureReports();
+  writeFileSync(join(REPORTS_DIR, "residuals-plan.json"), JSON.stringify(plan, null, 2));
+  writeFileSync(join(REPORTS_DIR, "residuals-plan.md"), renderResidualPlanMarkdown(plan, now.toISOString()));
+  console.log(
+    `План: ${plan.batches.length} заказов КМ, ${plan.totalCodes} кодов (~${plan.estimatedCostRub} ₽), отклонено ${plan.rejected.length}.\n` +
+      `Отчёты: ${REPORTS_DIR}/residuals-plan.md`,
+  );
+
+  if (!create) return;
+  if (cfg.dryRun) {
+    console.log("DRY_RUN=true — документы не создаются. Снимите DRY_RUN, чтобы создать Заказы КМ.");
+    return;
+  }
+  const orgs = await ms.organizations();
+  if (orgs.length === 0) throw new Error("В МойСклад нет юрлиц");
+  const productMetaById = new Map(
+    (await ms.allProducts()).map((p) => [p.id ?? idFromHref(p.meta.href), p.meta]),
+  );
+  for (const batch of plan.batches) {
+    const positions = batch.positions
+      .map((pos) => ({ assortmentMeta: productMetaById.get(pos.productId)!, quantity: pos.quantity }))
+      .filter((p) => p.assortmentMeta);
+    const doc = await ms.createEmissionOrder({
+      organizationMeta: orgs[0].meta,
+      trackingType: batch.trackingType,
+      emissionType: batch.emissionType,
+      name: batch.name,
+      description:
+        "Создан интеграцией маркировки. Дальше: «Заказать коды» → «Печать» → «Ввод в оборот». Инструкция: docs/sop/30-residuals.md",
+      positions,
+    });
+    console.log(`Создан Заказ КМ: ${doc.name}`);
+  }
+}
+
+async function cmdReconcile(): Promise<void> {
+  const ms = needMoysklad();
+  console.log("Выгружаю товары и остатки МойСклад…");
+  const products = await fetchAuditable(ms);
+  const stock = await ms.stockAll("stockMode=positiveOnly");
+  const stockByName = new Map(stock.map((s) => [s.name ?? "", s.stock]));
+  const now = new Date();
+
+  const msLines = products
+    .filter((p) => !p.archived)
+    .flatMap((p) => {
+      const c = classify(p);
+      if (!c.wave || !obligationOn(c.wave, now).markingMandatory) return [];
+      const gtin = extractGtins(p)[0];
+      if (!gtin) return [];
+      return [{ gtin, name: p.name, stock: Math.floor(stockByName.get(p.name) ?? 0) }];
+    })
+    .filter((l) => l.stock > 0);
+
+  const trueApi = makeTrueApi();
+  let chzLines: ChzStockLine[] = [];
+  if (trueApi) {
+    console.log("Запрашиваю коды «в обороте» в ГИС МТ…");
+    const byGtin = new Map<string, number>();
+    // Выгрузка по группам: perfumery и beauty (cosmetics).
+    for (const pg of ["perfumery", "beauty"]) {
+      try {
+        const cises = await trueApi.cisList({ pg, status: "INTRODUCED", limit: "10000" });
+        for (const c of cises) {
+          const g = (c.gtin ?? "").padStart(14, "0");
+          if (g) byGtin.set(g, (byGtin.get(g) ?? 0) + 1);
+        }
+      } catch (err) {
+        console.error(`ГИС МТ, группа ${pg}: ${(err as Error).message}`);
+      }
+    }
+    chzLines = [...byGtin].map(([gtin, n]) => ({ gtin, inCirculation: n }));
+  } else {
+    console.log(
+      "True API не настроен (CRPT_SIGNER_CMD/CRPT_INN) — сверка только по стороне МойСклад.\n" +
+        "Альтернатива: выгрузите из ЛК ЧЗ отчёт «Коды в обороте» в CSV и запустите reconcile-csv.",
+    );
+  }
+
+  const discrepancies = reconcile(msLines, chzLines);
+  ensureReports();
+  writeFileSync(join(REPORTS_DIR, "reconcile.md"), renderReconcileMarkdown(discrepancies, now.toISOString()));
+  writeFileSync(join(REPORTS_DIR, "reconcile.json"), JSON.stringify(discrepancies, null, 2));
+  console.log(`Расхождений: ${discrepancies.length}. Отчёт: ${REPORTS_DIR}/reconcile.md`);
+}
+
+async function cmdDistance(): Promise<void> {
+  const ms = needMoysklad();
+  console.log("Выгружаю отгрузки за 14 дней и выводы из оборота…");
+  const since = new Date(Date.now() - 14 * 86400_000).toISOString().slice(0, 19);
+  const demands: DemandSummary[] = [];
+  for await (const d of ms.iterate<Record<string, never>>(
+    "/entity/demand",
+    `filter=moment>${encodeURIComponent(since)}`,
+    100,
+  )) {
+    const doc = d as unknown as { id: string; name: string; moment: string; agent?: { meta: { href: string } } };
+    let codes = 0;
+    try {
+      const positions = await ms.documentPositions("demand", doc.id);
+      for (const pos of positions) {
+        const posId = pos.meta ? idFromHref(pos.meta.href) : "";
+        if (!posId) continue;
+        codes += (await ms.positionTrackingCodes("demand", doc.id, posId)).length;
+      }
+    } catch {
+      // позиции без доступа пропускаем
+    }
+    demands.push({
+      id: doc.id,
+      name: doc.name,
+      moment: new Date(doc.moment),
+      trackedCodesCount: codes,
+      // Розничность отгрузки определяем по контрагенту-физлицу в проде;
+      // до настройки атрибутов считаем розничными все отгрузки с КМ.
+      isRetailShipment: codes > 0,
+    });
+  }
+  const retireOrders: RetireOrderSummary[] = [];
+  for await (const r of ms.iterate<Record<string, never>>("/entity/retireorder", "", 100)) {
+    const doc = r as unknown as RetireOrderSummary & { id: string; name: string };
+    retireOrders.push(doc);
+  }
+  const findings = checkDistanceRetirement(demands, retireOrders);
+  ensureReports();
+  writeFileSync(join(REPORTS_DIR, "distance.json"), JSON.stringify(findings, null, 2));
+  if (findings.length === 0) {
+    console.log("Все отгрузки с КМ закрыты выводом из оборота ✅");
+  } else {
+    for (const f of findings) console.log(`[${f.status}] ${f.message}`);
+    console.log(`Всего: ${findings.length}. Детали: ${REPORTS_DIR}/distance.json`);
+  }
+}
+
+function cmdScan(code: string): void {
+  const parsed = parseDataMatrix(code);
+  console.log(JSON.stringify(parsed, null, 2));
+  if (parsed.issues.length === 0) {
+    console.log("\n✅ Код структурно корректен. Статус в ГИС МТ проверяйте перед продажей (касса/True API).");
+  } else {
+    console.log("\n❌ Код не прошёл проверку — см. issues выше.");
+    process.exitCode = 1;
+  }
+}
+
+function cmdLabels(file: string, format: string): void {
+  const codes = readFileSync(file, "utf8")
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+  const jobs = codes.map((code) => {
+    const parsed = parseDataMatrix(code);
+    return { code, productName: "", gtin: parsed.gtin ?? "" };
+  });
+  ensureReports();
+  const out =
+    format === "tspl" ? toTspl(jobs) : format === "csv" ? toCsv(jobs) : toZpl(jobs);
+  const target = join(REPORTS_DIR, `labels.${format || "zpl"}`);
+  writeFileSync(target, out, "binary");
+  console.log(`Этикеток: ${jobs.length}. Файл: ${target}`);
+}
+
+async function cmdSetupWebhooks(baseUrl: string): Promise<void> {
+  const cfg = loadConfig();
+  const ms = needMoysklad();
+  const url = cfg.server.webhookSecret ? `${baseUrl}?secret=${cfg.server.webhookSecret}` : baseUrl;
+  const wanted = [...DOCS_WITH_TRACKING_CODES].flatMap((entityType) => [
+    { entityType, action: "CREATE" as const },
+    { entityType, action: "UPDATE" as const },
+  ]);
+  if (cfg.dryRun) {
+    console.log("DRY_RUN=true — вебхуки не создаются. Планировались:");
+    for (const w of wanted) console.log(`  ${w.entityType} ${w.action} → ${url}/webhook/${w.entityType}/${w.action.toLowerCase()}`);
+    return;
+  }
+  const res = await ms.ensureWebhooks(url, wanted);
+  console.log(`Вебхуки: создано ${res.created}, уже были ${res.kept}`);
+}
+
+const [, , command, ...args] = process.argv;
+
+switch (command) {
+  case "audit":
+    await cmdAudit(args.includes("--fix"));
+    break;
+  case "plan-residuals":
+    await cmdPlanResiduals(args.includes("--create"));
+    break;
+  case "reconcile":
+    await cmdReconcile();
+    break;
+  case "distance":
+    await cmdDistance();
+    break;
+  case "scan":
+    cmdScan(args.join(" "));
+    break;
+  case "labels":
+    cmdLabels(args[0], args[1] ?? "zpl");
+    break;
+  case "setup-webhooks":
+    await cmdSetupWebhooks(args[0]);
+    break;
+  case "serve":
+    startServer();
+    break;
+  default:
+    console.log(
+      [
+        "Интеграция маркировки «Честный знак» × МойСклад (Cosmex)",
+        "",
+        "Команды:",
+        "  node src/cli.ts audit [--fix]",
+        "  node src/cli.ts plan-residuals [--create]",
+        "  node src/cli.ts reconcile",
+        "  node src/cli.ts distance",
+        "  node src/cli.ts scan <код>",
+        "  node src/cli.ts labels <файл-с-кодами> [zpl|tspl|csv]",
+        "  node src/cli.ts setup-webhooks <публичный URL сервера>",
+        "  node src/cli.ts serve",
+        "",
+        "Настройки: скопируйте .env.example в .env. По умолчанию DRY_RUN=true.",
+      ].join("\n"),
+    );
+}
