@@ -56,3 +56,30 @@ export class StubSigner implements Signer {
     return "STUB." + Buffer.from(data, "utf8").toString("base64");
   }
 }
+
+/**
+ * Удалённый подписант: отправляет данные в очередь стража (/sign/request),
+ * которую опрашивает офисный агент с КриптоПро (deploy/office-signer/agent.ps1).
+ */
+export class RemoteSigner implements Signer {
+  private readonly baseUrl: string;
+  private readonly secret: string;
+
+  constructor(baseUrl: string, secret: string) {
+    this.baseUrl = baseUrl.replace(/\/+$/, "");
+    this.secret = secret;
+  }
+
+  async sign(data: string): Promise<string> {
+    const res = await fetch(`${this.baseUrl}/sign/request`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Signer-Secret": this.secret },
+      body: JSON.stringify({ data }),
+    });
+    const body = (await res.json().catch(() => ({}))) as { signature?: string; error?: string };
+    if (!res.ok || !body.signature) {
+      throw new Error(`Удалённый подписант: HTTP ${res.status} ${body.error ?? ""}`.trim());
+    }
+    return body.signature;
+  }
+}

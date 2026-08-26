@@ -39,6 +39,8 @@ export interface AppConfig {
     port: number;
     /** Секрет, которым МойСклад подписывает вебхуки (проверяем свой URL-суффикс). */
     webhookSecret: string;
+    /** Секрет офисного подписанта (agent.ps1) для /sign/*. */
+    signerSecret: string;
   };
   /** dry-run: все записывающие вызовы только логируются, ничего не отправляется. */
   dryRun: boolean;
@@ -107,6 +109,7 @@ export function loadConfig(envFilePath = ".env", env: Record<string, string | un
     server: {
       port: Number(get("PORT") ?? "8787"),
       webhookSecret: get("WEBHOOK_SECRET") ?? "",
+      signerSecret: get("SIGNER_SECRET") ?? "",
     },
     dryRun: (get("DRY_RUN") ?? "true") !== "false",
   };
@@ -122,8 +125,10 @@ export function requireFor(cfg: AppConfig, scenario: "moysklad" | "trueapi" | "s
       }
       break;
     case "trueapi":
-      if (!cfg.crpt.signerCmd) missing.push("CRPT_SIGNER_CMD");
-      if (!cfg.crpt.inn) missing.push("CRPT_INN");
+      // Подпись: либо локальная команда КриптоПро, либо офисный подписант.
+      if (!cfg.crpt.signerCmd && !cfg.server.signerSecret) {
+        missing.push("CRPT_SIGNER_CMD или SIGNER_SECRET (офисный подписант)");
+      }
       break;
     case "suz":
       if (!cfg.crpt.omsId) missing.push("CRPT_OMS_ID");

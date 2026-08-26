@@ -15,6 +15,7 @@ import { MoyskladClient, idFromHref, type MsDocument, type DocumentPosition } fr
 import { checkDocument, trafficLight, type DocumentView, type Finding } from "./guard/checks.ts";
 import { parseDataMatrix } from "./core/gs1.ts";
 import { makeNotifier } from "./notify/telegram.ts";
+import { SignQueue } from "./crpt/signqueue.ts";
 
 const DATA_DIR = process.env.DATA_DIR ?? "data";
 
@@ -98,6 +99,7 @@ export function startServer(): void {
   const missing = requireFor(cfg, "moysklad");
   const ms = missing.length === 0 ? new MoyskladClient(cfg.moysklad) : null;
   const notifier = makeNotifier(cfg);
+  const signQueue = new SignQueue();
   loadRecent();
 
   const queue: Array<{ docType: string; docId: string }> = [];
@@ -174,6 +176,54 @@ export function startServer(): void {
         return;
       }
 
+      // ---------- Очередь подписи УКЭП (офисный агент) ----------
+      if (url.pathname.startsWith("/sign/")) {
+        const secret = req.headers["x-signer-secret"];
+        if (!cfg.server.signerSecret || secret !== cfg.server.signerSecret) {
+          res.writeHead(403).end();
+          return;
+        }
+        if (req.method === "POST" && url.pathname === "/sign/request") {
+          const { data } = JSON.parse(await readBody(req)) as { data: string };
+          try {
+            const signature = await signQueue.request(data);
+            res
+              .writeHead(200, { "Content-Type": "application/json" })
+              .end(JSON.stringify({ signature }));
+          } catch (err) {
+            res
+              .writeHead(504, { "Content-Type": "application/json; charset=utf-8" })
+              .end(JSON.stringify({ error: (err as Error).message }));
+          }
+          return;
+        }
+        if (req.method === "GET" && url.pathname === "/sign/poll") {
+          // Long-poll до 25 секунд, чтобы агент не молотил запросами.
+          const deadline = Date.now() + 25_000;
+          let jobs = signQueue.take();
+          while (jobs.length === 0 && Date.now() < deadline) {
+            await new Promise((r) => setTimeout(r, 1000));
+            jobs = signQueue.take();
+          }
+          res
+            .writeHead(200, { "Content-Type": "application/json" })
+            .end(JSON.stringify({ jobs: jobs.map((j) => ({ id: j.id, data: j.data })) }));
+          return;
+        }
+        if (req.method === "POST" && url.pathname === "/sign/result") {
+          const body = JSON.parse(await readBody(req)) as {
+            id: string;
+            signature?: string;
+            error?: string;
+          };
+          const ok = signQueue.complete(body.id, body.signature ?? null, body.error);
+          res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ ok }));
+          return;
+        }
+        res.writeHead(404).end();
+        return;
+      }
+
       // Проверка скана с рабочего места: POST /scan {"code": "..."}
       if (req.method === "POST" && url.pathname === "/scan") {
         const body = await readBody(req);
@@ -196,7 +246,14 @@ export function startServer(): void {
       if (req.method === "GET" && url.pathname === "/health") {
         res
           .writeHead(200, { "Content-Type": "application/json" })
-          .end(JSON.stringify({ ok: true, moysklad: Boolean(ms), checks: recent.length }));
+          .end(
+            JSON.stringify({
+              ok: true,
+              moysklad: Boolean(ms),
+              checks: recent.length,
+              signQueue: signQueue.pending(),
+            }),
+          );
         return;
       }
 

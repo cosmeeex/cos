@@ -25,7 +25,7 @@ import { parseDataMatrix } from "./core/gs1.ts";
 import { reconcile, renderReconcileMarkdown, type ChzStockLine } from "./reconcile/stocks.ts";
 import { checkDistanceRetirement, type DemandSummary, type RetireOrderSummary } from "./guard/distance.ts";
 import { TrueApiClient } from "./crpt/trueapi.ts";
-import { ExternalSigner, StubSigner } from "./crpt/signer.ts";
+import { ExternalSigner, StubSigner, RemoteSigner } from "./crpt/signer.ts";
 import { HttpClient } from "./core/http.ts";
 import { startServer } from "./server.ts";
 
@@ -50,7 +50,10 @@ function makeTrueApi(): TrueApiClient | null {
   if (requireFor(cfg, "trueapi").length > 0) return null;
   const signer = cfg.crpt.signerCmd
     ? new ExternalSigner(cfg.crpt.signerCmd, cfg.crpt.certThumbprint)
-    : new StubSigner();
+    : cfg.server.signerSecret
+      ? // Очередь подписи живёт в страже на этом же сервере.
+        new RemoteSigner(`http://127.0.0.1:${cfg.server.port}`, cfg.server.signerSecret)
+      : new StubSigner();
   return new TrueApiClient(new HttpClient(cfg.crpt.trueApiUrl), signer, (l) => console.error(l));
 }
 

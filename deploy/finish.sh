@@ -18,6 +18,9 @@ if grep -q '^PORT=' "$APP/.env"; then
 else
   echo "PORT=$PORT" >> "$APP/.env"
 fi
+if ! grep -q '^SIGNER_SECRET=' "$APP/.env"; then
+  echo "SIGNER_SECRET=$(openssl rand -hex 16)" >> "$APP/.env"
+fi
 cp "$APP/deploy/cosmex-guard.service" /etc/systemd/system/cosmex-guard.service
 systemctl daemon-reload
 systemctl enable cosmex-guard >/dev/null 2>&1 || true
@@ -32,8 +35,12 @@ if ! echo "$HEALTH" | grep -q '"moysklad"'; then
 fi
 
 echo "== 2/4 nginx (HTTP) =="
-DASH_PASS=$(openssl rand -hex 8)
-printf 'cosmex:%s\n' "$(openssl passwd -apr1 "$DASH_PASS")" > /etc/nginx/.cosmex-guard.htpasswd
+if [ -f /etc/nginx/.cosmex-guard.htpasswd ]; then
+  DASH_PASS="(прежний — не менялся)"
+else
+  DASH_PASS=$(openssl rand -hex 8)
+  printf 'cosmex:%s\n' "$(openssl passwd -apr1 "$DASH_PASS")" > /etc/nginx/.cosmex-guard.htpasswd
+fi
 cat > /etc/nginx/sites-available/cosmex-guard <<NGINX
 server {
     listen 80;
@@ -69,6 +76,10 @@ server {
     location = /health {
         proxy_pass http://127.0.0.1:$PORT;
     }
+    location /sign/ {
+        proxy_pass http://127.0.0.1:$PORT;
+        proxy_read_timeout 60s;
+    }
     location / {
         auth_basic "Cosmex guard";
         auth_basic_user_file /etc/nginx/.cosmex-guard.htpasswd;
@@ -86,4 +97,6 @@ DRY_RUN=false node src/cli.ts setup-webhooks "https://$DOMAIN"
 echo "=================================================================="
 echo "ГОТОВО."
 echo "Панель менеджера: https://$DOMAIN  логин: cosmex  пароль: $DASH_PASS"
+SIGNER=$(grep '^SIGNER_SECRET=' "$APP/.env" | cut -d= -f2)
+echo "Секрет офисного подписанта (в agent.ps1): $SIGNER"
 echo -n "Проверка снаружи: " && curl -s "https://$DOMAIN/health" && echo
