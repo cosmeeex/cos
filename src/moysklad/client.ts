@@ -325,6 +325,16 @@ export class MoyskladClient {
     return res.rows;
   }
 
+  async stores(): Promise<Entity[]> {
+    const res = await this.http.get<ListResponse<Entity>>("/entity/store");
+    return res.rows;
+  }
+
+  /** Создание произвольной сущности (товар, списание, оприходование…). */
+  async createEntity<T = Entity>(entityType: string, body: unknown): Promise<T> {
+    return this.http.post<T>(`/entity/${entityType}`, body);
+  }
+
   // ---------- Отчёты ----------
 
   async stockAll(params = ""): Promise<StockRow[]> {

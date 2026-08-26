@@ -324,6 +324,118 @@ async function cmdSetupWebhooks(baseUrl: string): Promise<void> {
   console.log(`Вебхуки: создано ${res.created}, уже были ${res.kept}, удалено устаревших ${res.removed}`);
 }
 
+async function cmdDupCreate(file: string): Promise<void> {
+  const cfg = loadConfig();
+  const ms = needMoysklad();
+  const { parseDupCsv, planDuplicates, DUP_MARKER, dupName } = await import("./residuals/duplicates.ts");
+  const requests = parseDupCsv(readFileSync(file, "utf8"));
+  console.log(`Заявок на дубли: ${requests.length}. Выгружаю товары и остатки…`);
+
+  const products = await ms.allProducts();
+  const stock = await ms.stockAll("stockMode=positiveOnly");
+  const stockByName = new Map(stock.map((s) => [s.name ?? "", s.stock]));
+  const lite = products.map((p) => ({
+    id: p.id ?? idFromHref(p.meta.href),
+    name: p.name ?? "",
+    archived: p.archived,
+    trackingType: p.trackingType,
+    stock: Math.floor(stockByName.get(p.name ?? "") ?? 0),
+  }));
+  const actions = planDuplicates(requests, lite);
+
+  for (const a of actions.filter((x) => x.kind === "reject")) {
+    console.log(`✗ ${a.sourceName}: ${a.reason}`);
+  }
+  const work = actions.filter((a) => a.kind !== "reject");
+  if (cfg.dryRun) {
+    console.log("DRY_RUN=true — план без изменений:");
+    for (const a of work) console.log(`  ${a.kind}: «${a.sourceName}» → «${a.dupNameResolved}» × ${a.quantity}`);
+    return;
+  }
+
+  const [org] = await ms.organizations();
+  const [store] = await ms.stores();
+  const byName = new Map(products.map((p) => [p.name ?? "", p]));
+
+  for (const a of work) {
+    const source = byName.get(a.sourceName)!;
+    if (a.kind === "create_dup") {
+      const dup = await ms.createEntity("product", {
+        name: a.dupNameResolved,
+        article: source.article ? `${source.article}-NM` : undefined,
+        uom: (source as Record<string, unknown>).uom,
+        salePrices: (source as Record<string, unknown>).salePrices,
+        productFolder: source.productFolder,
+        description: `${DUP_MARKER} Немаркированные остатки товара «${a.sourceName}». Создан интеграцией маркировки ${new Date().toISOString().slice(0, 10)}. Продажа без сканирования кода. После распродажи карточка архивируется автоматически (SOP 30).`,
+      });
+      byName.set(a.dupNameResolved, dup as typeof source);
+      console.log(`+ дубль создан: «${a.dupNameResolved}»`);
+    }
+    if (a.kind === "transfer") {
+      const dup = byName.get(a.dupNameResolved);
+      if (!dup) {
+        console.log(`✗ перенос «${a.sourceName}»: дубль не найден`);
+        continue;
+      }
+      const positionsOf = (meta: typeof source.meta) => [
+        { assortment: { meta }, quantity: a.quantity },
+      ];
+      const note = `Перенос немаркированного остатка на «${a.dupNameResolved}» (интеграция маркировки)`;
+      await ms.createEntity("loss", {
+        organization: { meta: org.meta },
+        store: { meta: store.meta },
+        description: note,
+        positions: positionsOf(source.meta),
+      });
+      await ms.createEntity("enter", {
+        organization: { meta: org.meta },
+        store: { meta: store.meta },
+        description: note,
+        positions: positionsOf(dup.meta),
+      });
+      console.log(`→ перенесено ${a.quantity} шт: «${a.sourceName}» → «${a.dupNameResolved}»`);
+    }
+  }
+  console.log("Готово. Пометьте перенесённые единицы на полке стикером «остаток» (SOP 20/30).");
+}
+
+async function cmdDupReport(close: boolean): Promise<void> {
+  const cfg = loadConfig();
+  const ms = needMoysklad();
+  const { isDupName, dupHealth } = await import("./residuals/duplicates.ts");
+  const products = await ms.allProducts();
+  const stock = await ms.stockAll();
+  const stockByName = new Map(stock.map((s) => [s.name ?? "", s.stock]));
+  const dups = products
+    .filter((p) => !p.archived && isDupName(p.name ?? ""))
+    .map((p) => ({
+      id: p.id ?? idFromHref(p.meta.href),
+      meta: p.meta,
+      name: p.name ?? "",
+      stock: Math.floor(stockByName.get(p.name ?? "") ?? 0),
+      createdAt: (p as Record<string, unknown>).updated as string | undefined,
+    }));
+  if (dups.length === 0) {
+    console.log("Карточек-дублей «(немарк.)» нет.");
+    return;
+  }
+  const health = dupHealth(dups);
+  for (const h of health) {
+    console.log(`[${h.verdict}] «${h.name}» остаток ${h.stock}${h.note ? ` — ${h.note}` : ""}`);
+  }
+  if (!close) return;
+  const toArchive = health.filter((h) => h.verdict === "archive");
+  if (cfg.dryRun) {
+    console.log(`DRY_RUN=true — к архивации ${toArchive.length} дублей, изменения не отправлены.`);
+    return;
+  }
+  for (const h of toArchive) {
+    const dup = dups.find((d) => d.name === h.name)!;
+    await ms.updateProduct(dup.id, { archived: true });
+    console.log(`архивирован: «${h.name}»`);
+  }
+}
+
 const [, , command, ...args] = process.argv;
 
 switch (command) {
@@ -345,6 +457,12 @@ switch (command) {
   case "labels":
     cmdLabels(args[0], args[1] ?? "zpl");
     break;
+  case "dup-create":
+    await cmdDupCreate(args[0]);
+    break;
+  case "dup-report":
+    await cmdDupReport(args.includes("--close"));
+    break;
   case "setup-webhooks":
     await cmdSetupWebhooks(args[0]);
     break;
@@ -363,6 +481,8 @@ switch (command) {
         "  node src/cli.ts distance",
         "  node src/cli.ts scan <код>",
         "  node src/cli.ts labels <файл-с-кодами> [zpl|tspl|csv]",
+        "  node src/cli.ts dup-create <файл.csv>   # «название;кол-во» — дубли (немарк.)",
+        "  node src/cli.ts dup-report [--close]    # состояние дублей, архив пустых",
         "  node src/cli.ts setup-webhooks <публичный URL сервера>",
         "  node src/cli.ts serve",
         "",
