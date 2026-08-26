@@ -165,7 +165,7 @@ export class MoyskladClient {
     }
     this.http = new HttpClient(cfg.baseUrl, {
       headers,
-      limiter: new RateLimiter(40, 3000, 4),
+      limiter: new RateLimiter(16, 3000, 3), // токен пользователя: 22/3с с 05.2026, 15/3с с 09.2026
       log,
     });
   }
