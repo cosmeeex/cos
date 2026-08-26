@@ -41,7 +41,8 @@ export class ConsoleNotifier implements Notifier {
 }
 
 export function makeNotifier(cfg: AppConfig): Notifier {
-  if (cfg.telegram.botToken && cfg.telegram.chatId && !cfg.dryRun) {
+  // Уведомления — не запись в учёт: работают и при DRY_RUN.
+  if (cfg.telegram.botToken && cfg.telegram.chatId) {
     return new TelegramNotifier(cfg.telegram.botToken, cfg.telegram.chatId);
   }
   return new ConsoleNotifier();
