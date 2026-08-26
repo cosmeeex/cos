@@ -13,7 +13,7 @@ Environment=NODE_ENV=production
 # Секреты — в /opt/cosmex-chestny-znak/.env (читается приложением)
 NoNewPrivileges=true
 ProtectSystem=full
-ReadWritePaths=/opt/cosmex-chestny-znak/data /opt/cosmex-chestny-znak/reports
+ReadWritePaths=-/opt/cosmex-chestny-znak/data -/opt/cosmex-chestny-znak/reports
 
 [Install]
 WantedBy=multi-user.target
