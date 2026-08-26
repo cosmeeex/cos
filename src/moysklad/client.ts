@@ -353,27 +353,50 @@ export class MoyskladClient {
     await this.http.delete(`/entity/webhook/${id}`);
   }
 
-  /** Идемпотентно приводит набор вебхуков к желаемому списку. */
+  /**
+   * Идемпотентно приводит набор вебхуков к желаемому списку.
+   * prefix — базовый адрес вида https://host/webhook[/секрет];
+   * свои же вебхуки на том же хосте с другим форматом URL удаляются.
+   */
   async ensureWebhooks(
-    baseUrl: string,
+    prefix: string,
     wanted: Array<{ entityType: string; action: Webhook["action"] }>,
-  ): Promise<{ created: number; kept: number }> {
+  ): Promise<{ created: number; kept: number; removed: number }> {
+    const host = new URL(prefix).host;
     const existing = await this.webhooks();
+    const wantedUrls = new Map(
+      wanted.map((w) => [
+        `${w.entityType}:${w.action}`,
+        `${prefix}/${w.entityType}/${(w.action ?? "").toLowerCase()}`,
+      ]),
+    );
     let created = 0;
     let kept = 0;
-    for (const w of wanted) {
-      const url = `${baseUrl}/webhook/${w.entityType}/${(w.action ?? "").toLowerCase()}`;
-      const found = existing.find(
-        (e) => e.entityType === w.entityType && e.action === w.action && e.url === url,
+    let removed = 0;
+    // Убираем свои устаревшие/битые вебхуки на этом хосте.
+    for (const e of existing) {
+      if (!e.url || !e.url.includes(host)) continue;
+      const desired = wantedUrls.get(`${e.entityType}:${e.action}`);
+      if (e.url === desired) continue;
+      if (e.id) {
+        await this.deleteWebhook(e.id);
+        removed++;
+      }
+    }
+    const fresh = await this.webhooks();
+    for (const [key, url] of wantedUrls) {
+      const [entityType, action] = key.split(":") as [string, Webhook["action"]];
+      const found = fresh.find(
+        (e) => e.entityType === entityType && e.action === action && e.url === url,
       );
       if (found) {
         kept++;
       } else {
-        await this.createWebhook(url, w.entityType, w.action);
+        await this.createWebhook(url, entityType, action);
         created++;
       }
     }
-    return { created, kept };
+    return { created, kept, removed };
   }
 }
 

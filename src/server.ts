@@ -146,9 +146,15 @@ export function startServer(): void {
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     const url = new URL(req.url ?? "/", "http://localhost");
     try {
-      // Вебхуки МойСклад: /webhook/{entityType}/{action}
-      if (req.method === "POST" && url.pathname.startsWith("/webhook/")) {
-        if (cfg.server.webhookSecret && url.searchParams.get("secret") !== cfg.server.webhookSecret) {
+      // Вебхуки МойСклад: /webhook/{секрет}/{entityType}/{action}
+      // (секрет также принимается query-параметром для обратной совместимости).
+      if (req.method === "POST" && url.pathname.startsWith("/webhook")) {
+        const segments = url.pathname.split("/").filter(Boolean); // ["webhook", секрет?, ...]
+        const secretOk =
+          !cfg.server.webhookSecret ||
+          segments[1] === cfg.server.webhookSecret ||
+          url.searchParams.get("secret") === cfg.server.webhookSecret;
+        if (!secretOk) {
           res.writeHead(403).end();
           return;
         }

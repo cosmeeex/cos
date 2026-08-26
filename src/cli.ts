@@ -305,18 +305,23 @@ function cmdLabels(file: string, format: string): void {
 async function cmdSetupWebhooks(baseUrl: string): Promise<void> {
   const cfg = loadConfig();
   const ms = needMoysklad();
-  const url = cfg.server.webhookSecret ? `${baseUrl}?secret=${cfg.server.webhookSecret}` : baseUrl;
+  // Секрет — сегментом пути: МойСклад дописывает ?requestId к URL,
+  // и query-параметры в зарегистрированном адресе ломаются.
+  const clean = baseUrl.replace(/\/+$/, "");
+  const prefix = cfg.server.webhookSecret
+    ? `${clean}/webhook/${cfg.server.webhookSecret}`
+    : `${clean}/webhook`;
   const wanted = [...DOCS_WITH_TRACKING_CODES].flatMap((entityType) => [
     { entityType, action: "CREATE" as const },
     { entityType, action: "UPDATE" as const },
   ]);
   if (cfg.dryRun) {
     console.log("DRY_RUN=true — вебхуки не создаются. Планировались:");
-    for (const w of wanted) console.log(`  ${w.entityType} ${w.action} → ${url}/webhook/${w.entityType}/${w.action.toLowerCase()}`);
+    for (const w of wanted) console.log(`  ${w.entityType} ${w.action} → ${prefix}/${w.entityType}/${w.action.toLowerCase()}`);
     return;
   }
-  const res = await ms.ensureWebhooks(url, wanted);
-  console.log(`Вебхуки: создано ${res.created}, уже были ${res.kept}`);
+  const res = await ms.ensureWebhooks(prefix, wanted);
+  console.log(`Вебхуки: создано ${res.created}, уже были ${res.kept}, удалено устаревших ${res.removed}`);
 }
 
 const [, , command, ...args] = process.argv;
