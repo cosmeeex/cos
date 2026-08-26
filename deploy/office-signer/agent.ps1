@@ -28,6 +28,16 @@ $CspTest    = "C:\Program Files\Crypto Pro\CSP\csptest.exe"
 $ErrorActionPreference = "Stop"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
+# Настройки из agent-config.json (создаёт install-agent.ps1) важнее значений выше.
+$ConfigPath = Join-Path $PSScriptRoot "agent-config.json"
+if (Test-Path $ConfigPath) {
+    $cfgJson = Get-Content $ConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ($cfgJson.GuardUrl) { $GuardUrl = $cfgJson.GuardUrl }
+    if ($cfgJson.Secret)   { $Secret   = $cfgJson.Secret }
+    if ($cfgJson.CertName) { $CertName = $cfgJson.CertName }
+    if ($cfgJson.CspTest)  { $CspTest  = $cfgJson.CspTest }
+}
+
 function Write-Log([string]$msg) {
     $line = "{0}  {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $msg
     Write-Host $line
