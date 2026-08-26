@@ -49,6 +49,19 @@ function orgFilter(): string {
     : "";
 }
 
+/** Юрлицо для документов маркировки: COSMEX Россия (MOYSKLAD_ORG_ID). */
+async function pickOrg(ms: MoyskladClient) {
+  const cfg = loadConfig();
+  const orgs = await ms.organizations();
+  if (orgs.length === 0) throw new Error("В МойСклад нет юрлиц");
+  if (cfg.moysklad.orgId) {
+    const found = orgs.find((o) => (o.id ?? "") === cfg.moysklad.orgId || o.meta.href.includes(cfg.moysklad.orgId!));
+    if (found) return found;
+    throw new Error(`Юрлицо MOYSKLAD_ORG_ID=${cfg.moysklad.orgId} не найдено`);
+  }
+  return orgs[0];
+}
+
 function ensureReports(): void {
   if (!existsSync(REPORTS_DIR)) mkdirSync(REPORTS_DIR, { recursive: true });
 }
@@ -174,8 +187,7 @@ async function cmdPlanResiduals(create: boolean): Promise<void> {
     console.log("DRY_RUN=true — документы не создаются. Снимите DRY_RUN, чтобы создать Заказы КМ.");
     return;
   }
-  const orgs = await ms.organizations();
-  if (orgs.length === 0) throw new Error("В МойСклад нет юрлиц");
+  const org = await pickOrg(ms);
   const productMetaById = new Map(
     (await ms.allProducts()).map((p) => [p.id ?? idFromHref(p.meta.href), p.meta]),
   );
@@ -184,7 +196,7 @@ async function cmdPlanResiduals(create: boolean): Promise<void> {
       .map((pos) => ({ assortmentMeta: productMetaById.get(pos.productId)!, quantity: pos.quantity }))
       .filter((p) => p.assortmentMeta);
     const doc = await ms.createEmissionOrder({
-      organizationMeta: orgs[0].meta,
+      organizationMeta: org.meta,
       trackingType: batch.trackingType,
       emissionType: batch.emissionType,
       name: batch.name,
@@ -376,8 +388,12 @@ async function cmdDupCreate(file: string): Promise<void> {
     return;
   }
 
-  const [org] = await ms.organizations();
-  const [store] = await ms.stores();
+  const org = await pickOrg(ms);
+  const cfgStores = loadConfig().moysklad.storeIds;
+  const allStores = await ms.stores();
+  const store = cfgStores.length
+    ? allStores.find((s) => cfgStores.includes(s.id ?? "")) ?? allStores[0]
+    : allStores[0];
   const byName = new Map(products.map((p) => [p.name ?? "", p]));
 
   for (const a of work) {
