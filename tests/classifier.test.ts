@@ -104,3 +104,32 @@ test("все волны имеют согласованные даты", () => {
   }
   assert.ok(waveById("perfumery-2020"));
 });
+
+test("служебные папки производства не считаются товарами", () => {
+  const c = classify({
+    name: "Этикетка 1198 Cosmex Derma LIFT крем-гель 50 мл",
+    pathName: "Производство (заготовки, упаковка и т.д.)/Этикетки",
+  });
+  assert.equal(c.group, "none");
+  assert.ok(c.confidence >= 0.85);
+});
+
+test("папка оборудования → не маркируется (цанги, запчасти)", () => {
+  const c = classify({ name: "Цанга Marathon", pathName: "Каталог/Оборудование/Запчасти" });
+  assert.equal(c.group, "none");
+});
+
+test("уточнённые правила: кутикула, обезжиривание, пенка для ног, гель для стирки", () => {
+  assert.equal(classify({ name: "Масло-карандаш для кутикулы OPI Лилия" }).wave?.id, "beauty-2025-w3");
+  assert.equal(classify({ name: "Средство для обезжиривания ногтей GEL-OFF" }).wave?.id, "beauty-2025-w3");
+  assert.equal(classify({ name: "Пенка для ног дезодорирующая 150 мл" }).wave?.id, "beauty-2025-w3");
+  assert.equal(classify({ name: "Гель для стирки Чистый хлопок 1,5 л" }).wave?.id, "beauty-2025-w1");
+});
+
+test("книпсер и точилка → не маркируются, а крем Алмадез — косметика, не антисептик", () => {
+  assert.equal(classify({ name: "Staleks Книпсер для ногтей BEAUTY & CARE 11" }).group, "none");
+  assert.equal(classify({ name: "Ellis Cosmetic Точилка EC BP 005" }).group, "none");
+  const almadez = classify({ name: "Медицинский крем для рук АЛМАДЕЗ 200 мл" });
+  assert.equal(almadez.wave?.trackingType, "CHEMISTRY");
+  assert.equal(classify({ name: "Кожный антисептик АЛМАДЕЗ-экспресс 250 мл" }).wave?.trackingType, "SANITIZER");
+});
