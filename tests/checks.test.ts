@@ -17,22 +17,23 @@ const gelPolish = (over: Partial<DocumentView["positions"][0]> = {}) => ({
   ...over,
 });
 
-test("розничная продажа маркируемого без кодов — блок", () => {
+test("розничная продажа маркируемого без кодов — предупреждение (переходный период)", () => {
   const findings = checkDocument({
     docType: "retaildemand",
     positions: [gelPolish({ trackingCodes: [] })],
   });
-  assert.ok(findings.some((f) => f.code === "NO_CODES_ON_OUTBOUND" && f.severity === "block"));
-  assert.equal(trafficLight(findings), "red");
+  assert.ok(findings.some((f) => f.code === "NO_CODES_ON_OUTBOUND" && f.severity === "warn"));
+  assert.equal(trafficLight(findings), "yellow");
 });
 
-test("кодов меньше количества — блок с точным дефицитом", () => {
+test("кодов меньше количества — предупреждение с точным дефицитом", () => {
   const findings = checkDocument({
     docType: "demand",
     positions: [gelPolish({ trackingCodes: [code("SER0000000001")] })],
   });
   const f = findings.find((x) => x.code === "CODES_LESS_THAN_QTY");
   assert.ok(f);
+  assert.equal(f!.severity, "warn");
   assert.match(f!.action, /1 шт/);
 });
 
@@ -87,12 +88,17 @@ test("приёмка маркируемого без кодов — предуп
   assert.equal(f!.severity, "warn");
 });
 
-test("маркируемый по классификатору товар без признака в карточке — предупреждение", () => {
-  const findings = checkDocument({
+test("коды есть, а признака в карточке нет — предупреждение; без кодов — тишина", () => {
+  const withCodes = checkDocument({
     docType: "supply",
     positions: [gelPolish({ trackingType: "NOT_TRACKED" })],
   });
-  assert.ok(findings.some((f) => f.code === "CARD_NOT_TRACKED"));
+  assert.ok(withCodes.some((f) => f.code === "CARD_NOT_TRACKED"));
+  const noCodes = checkDocument({
+    docType: "supply",
+    positions: [gelPolish({ trackingType: "NOT_TRACKED", trackingCodes: [] })],
+  });
+  assert.ok(!noCodes.some((f) => f.code === "CARD_NOT_TRACKED"));
 });
 
 test("немаркируемый товар не трогаем", () => {

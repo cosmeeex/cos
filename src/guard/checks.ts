@@ -65,21 +65,24 @@ export function checkDocument(doc: DocumentView, now = new Date()): Finding[] {
     // 1. Маркируемый товар в расходном документе без кодов.
     if (tracked && OUTBOUND_DOCS.has(doc.docType)) {
       const codesCount = countConsumerCodes(pos.trackingCodes);
+      // Переходный период (склад смешанный: 99% единиц — законные остатки
+      // без кодов): нехватка кодов — предупреждение, а не блок. После
+      // завершения домаркировки вернуть block.
       if (codesCount === 0) {
         findings.push({
-          severity: "block",
+          severity: "warn",
           code: "NO_CODES_ON_OUTBOUND",
           message: `«${pos.name}»: маркируемый товар уходит без кодов маркировки`,
           action:
-            "Отсканируйте DataMatrix с каждой единицы товара в позицию документа. Без кодов проводить нельзя — это продажа немаркированного товара.",
+            "Если это единицы С DataMatrix — отсканируйте каждую (обязательно!). Если это немаркированный остаток (выпуск до волны) — так можно, но лучше продавать его через карточку «(немарк.)».",
           positionName: pos.name,
         });
       } else if (codesCount < pos.quantity) {
         findings.push({
-          severity: "block",
+          severity: "warn",
           code: "CODES_LESS_THAN_QTY",
-          message: `«${pos.name}»: кодов ${codesCount}, а количество ${pos.quantity}`,
-          action: `Отсканируйте недостающие ${pos.quantity - codesCount} шт. или уменьшите количество в позиции.`,
+          message: `«${pos.name}»: кодов ${codesCount} при количестве ${pos.quantity}`,
+          action: `Нормально, только если остальные ${pos.quantity - codesCount} шт. — немаркированные остатки. Если на них есть DataMatrix — отсканируйте.`,
           positionName: pos.name,
         });
       } else if (codesCount > pos.quantity) {
@@ -160,17 +163,23 @@ export function checkDocument(doc: DocumentView, now = new Date()): Finding[] {
       }
     }
 
-    // 4. Карточка маркируемого товара без признака маркировки.
-    if (!pos.trackingType || pos.trackingType === "NOT_TRACKED") {
-      if (classified.wave && obligationOn(classified.wave, now).markingMandatory) {
-        findings.push({
-          severity: "warn",
-          code: "CARD_NOT_TRACKED",
-          message: `«${pos.name}»: похоже на маркируемый товар (${classified.wave.title}), но в карточке нет признака маркировки`,
-          action: "Проверьте карточку товара: укажите признак предмета маркировки и ТН ВЭД, иначе касса не запросит скан кода.",
-          positionName: pos.name,
-        });
-      }
+    // 4. В документе есть коды, а карточка «Без маркировки» — признак
+    //    точно должен стоять (стратегия: признак = у товара есть КМ).
+    //    Карточки без кодов на переходный период не трогаем — 99% склада
+    //    это законные немаркированные остатки.
+    if (
+      (!pos.trackingType || pos.trackingType === "NOT_TRACKED") &&
+      pos.trackingCodes.length > 0 &&
+      classified.wave &&
+      obligationOn(classified.wave, now).markingMandatory
+    ) {
+      findings.push({
+        severity: "warn",
+        code: "CARD_NOT_TRACKED",
+        message: `«${pos.name}»: к позиции привязаны коды маркировки, но в карточке нет признака маркировки`,
+        action: "Укажите в карточке признак предмета маркировки (и ТН ВЭД) — иначе касса не запросит скан и вывод из оборота не уйдёт.",
+        positionName: pos.name,
+      });
     }
 
     // 5. Особые случаи — подсказки.
