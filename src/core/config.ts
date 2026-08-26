@@ -13,6 +13,13 @@ export interface AppConfig {
     /** Логин/пароль — запасной вариант, если токен не выдан. */
     login: string | null;
     password: string | null;
+    /**
+     * id юрлица, по которому работает маркировка РФ (COSMEX Россия).
+     * Документы других организаций (Казахстан) страж и отчёты игнорируют.
+     */
+    orgId: string | null;
+    /** id российских складов (через запятую) — фильтр остатков для отчётов. */
+    storeIds: string[];
   };
   /** Честный знак (ГИС МТ) */
   crpt: {
@@ -87,6 +94,11 @@ export function loadConfig(envFilePath = ".env", env: Record<string, string | un
       token: get("MOYSKLAD_TOKEN"),
       login: get("MOYSKLAD_LOGIN"),
       password: get("MOYSKLAD_PASSWORD"),
+      orgId: get("MOYSKLAD_ORG_ID"),
+      storeIds: (get("MOYSKLAD_STORE_IDS") ?? "")
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean),
     },
     crpt: {
       sandbox,

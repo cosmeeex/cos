@@ -114,6 +114,12 @@ export function startServer(): void {
         if (!ms) continue;
         try {
           const { view, doc } = await toDocumentView(ms, docType, docId);
+          // Маркировка РФ касается только COSMEX Россия — документы
+          // казахстанских юрлиц пропускаем молча.
+          const orgHref = (doc.organization as { meta?: { href?: string } } | undefined)?.meta?.href;
+          if (cfg.moysklad.orgId && orgHref && !orgHref.includes(cfg.moysklad.orgId)) {
+            continue;
+          }
           const findings = checkDocument(view);
           const record: CheckRecord = {
             at: new Date().toISOString(),

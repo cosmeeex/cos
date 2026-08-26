@@ -31,6 +31,24 @@ import { startServer } from "./server.ts";
 
 const REPORTS_DIR = "reports";
 
+/** Фильтр остатков по российским складам (MOYSKLAD_STORE_IDS). */
+function stockParams(base: string): string {
+  const cfg = loadConfig();
+  if (cfg.moysklad.storeIds.length === 0) return base;
+  const filter = cfg.moysklad.storeIds
+    .map((id) => `store=${cfg.moysklad.baseUrl}/entity/store/${id}`)
+    .join(";");
+  return `${base}${base ? "&" : ""}filter=${encodeURIComponent(filter)}`;
+}
+
+/** Фильтр документов по юрлицу COSMEX Россия (MOYSKLAD_ORG_ID). */
+function orgFilter(): string {
+  const cfg = loadConfig();
+  return cfg.moysklad.orgId
+    ? `organization=${cfg.moysklad.baseUrl}/entity/organization/${cfg.moysklad.orgId}`
+    : "";
+}
+
 function ensureReports(): void {
   if (!existsSync(REPORTS_DIR)) mkdirSync(REPORTS_DIR, { recursive: true });
 }
@@ -120,7 +138,7 @@ async function cmdPlanResiduals(create: boolean): Promise<void> {
   const ms = needMoysklad();
   console.log("Выгружаю товары и остатки…");
   const products = await fetchAuditable(ms);
-  const stock = await ms.stockAll("stockMode=positiveOnly");
+  const stock = await ms.stockAll(stockParams("stockMode=positiveOnly"));
   const stockByName = new Map(stock.map((s) => [s.name ?? "", s.stock]));
 
   const items: ResidualItem[] = [];
@@ -182,7 +200,7 @@ async function cmdReconcile(): Promise<void> {
   const ms = needMoysklad();
   console.log("Выгружаю товары и остатки МойСклад…");
   const products = await fetchAuditable(ms);
-  const stock = await ms.stockAll("stockMode=positiveOnly");
+  const stock = await ms.stockAll(stockParams("stockMode=positiveOnly"));
   const stockByName = new Map(stock.map((s) => [s.name ?? "", s.stock]));
   const now = new Date();
 
@@ -233,10 +251,12 @@ async function cmdDistance(): Promise<void> {
   const ms = needMoysklad();
   console.log("Выгружаю отгрузки за 14 дней и выводы из оборота…");
   const since = new Date(Date.now() - 14 * 86400_000).toISOString().slice(0, 19);
+  const of = orgFilter();
+  const demandFilter = `moment>${since}` + (of ? `;${of}` : "");
   const demands: DemandSummary[] = [];
   for await (const d of ms.iterate<Record<string, never>>(
     "/entity/demand",
-    `filter=moment>${encodeURIComponent(since)}`,
+    `filter=${encodeURIComponent(demandFilter)}`,
     100,
   )) {
     const doc = d as unknown as { id: string; name: string; moment: string; agent?: { meta: { href: string } } };
@@ -335,7 +355,7 @@ async function cmdDupCreate(file: string): Promise<void> {
   console.log(`Заявок на дубли: ${requests.length}. Выгружаю товары и остатки…`);
 
   const products = await ms.allProducts();
-  const stock = await ms.stockAll("stockMode=positiveOnly");
+  const stock = await ms.stockAll(stockParams("stockMode=positiveOnly"));
   const stockByName = new Map(stock.map((s) => [s.name ?? "", s.stock]));
   const lite = products.map((p) => ({
     id: p.id ?? idFromHref(p.meta.href),
@@ -407,7 +427,7 @@ async function cmdDupReport(close: boolean): Promise<void> {
   const ms = needMoysklad();
   const { isDupName, dupHealth } = await import("./residuals/duplicates.ts");
   const products = await ms.allProducts();
-  const stock = await ms.stockAll();
+  const stock = await ms.stockAll(stockParams(""));
   const stockByName = new Map(stock.map((s) => [s.name ?? "", s.stock]));
   const dups = products
     .filter((p) => !p.archived && isDupName(p.name ?? ""))
