@@ -134,6 +134,20 @@ export function checkDocument(doc: DocumentView, now = new Date()): Finding[] {
           positionName: pos.name,
         });
       }
+      // Сокращённый код (короткий серийник / без криптохвоста).
+      // Касса МойСклад сохраняет в розничную продажу усечённый код, хотя на
+      // кассе был проверен полный DataMatrix (ККТ + «Честный знак») и чек
+      // обработан успешно — для retaildemand это норма, а не ошибка.
+      if (parsed.issues.length === 0 && parsed.truncation.length > 0 && doc.docType !== "retaildemand") {
+        findings.push({
+          severity: "warn",
+          code: "TRUNCATED_CODE",
+          message: `«${pos.name}»: отсканирован сокращённый код — ${parsed.truncation.join(", ")}`,
+          action:
+            "Для отгрузок и приёмок сканируйте полный DataMatrix с упаковки (квадратный код, не линейный штрихкод). Если сканер настроен обрезать код — поправьте настройки сканера.",
+          positionName: pos.name,
+        });
+      }
       if (parsed.identityCode) {
         const prev = seenCodes.get(parsed.identityCode);
         if (prev) {

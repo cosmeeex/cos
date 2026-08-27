@@ -312,11 +312,13 @@ async function cmdDistance(): Promise<void> {
 function cmdScan(code: string): void {
   const parsed = parseDataMatrix(code);
   console.log(JSON.stringify(parsed, null, 2));
-  if (parsed.issues.length === 0) {
-    console.log("\n✅ Код структурно корректен. Статус в ГИС МТ проверяйте перед продажей (касса/True API).");
-  } else {
+  if (parsed.issues.length > 0) {
     console.log("\n❌ Код не прошёл проверку — см. issues выше.");
     process.exitCode = 1;
+  } else if (parsed.truncation.length > 0) {
+    console.log(`\n⚠️ Код сокращённый (${parsed.truncation.join(", ")}). Для сверки годится; для приёмки/отгрузки сканируйте полный DataMatrix.`);
+  } else {
+    console.log("\n✅ Код структурно корректен. Статус в ГИС МТ проверяйте перед продажей (касса/True API).");
   }
 }
 

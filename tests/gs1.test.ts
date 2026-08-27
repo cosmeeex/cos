@@ -51,11 +51,20 @@ test("сканер в русской раскладке чинится", () => {
   assert.deepEqual(parsed.issues, []);
 });
 
-test("код без криптохвоста помечается (для продажи нужен полный DataMatrix)", () => {
+test("код без криптохвоста — не ошибка, а признак сокращённого кода", () => {
   const short = `01${GTIN}21${SERIAL}`;
   const parsed = parseDataMatrix(short);
-  assert.ok(parsed.issues.some((i) => i.includes("криптохвост")));
+  assert.deepEqual(parsed.issues, []);
+  assert.ok(parsed.truncation.some((i) => i.includes("криптохвост")));
   assert.equal(parsed.identityCode, `01${GTIN}21${SERIAL}`);
+});
+
+test("короткий серийник (касса обрезает код) — признак сокращённого кода, не ошибка", () => {
+  const cut = `01${GTIN}21ABC123`;
+  const parsed = parseDataMatrix(cut);
+  assert.deepEqual(parsed.issues, []);
+  assert.ok(parsed.truncation.some((i) => i.includes("6")));
+  assert.equal(parsed.identityCode, `01${GTIN}21ABC123`);
 });
 
 test("битый GTIN и короткий серийник дают находки", () => {

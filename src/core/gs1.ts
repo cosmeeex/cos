@@ -69,6 +69,12 @@ export interface ParsedMark {
   identityCode: string | null;
   /** Проблемы, найденные при разборе (пустой массив = код структурно валиден). */
   issues: string[];
+  /**
+   * Признаки сокращённого кода: короткий серийник, нет криптохвоста.
+   * Это НЕ ошибки разбора: Касса МойСклад сохраняет в розничную продажу
+   * усечённый код, хотя на кассе был проверен полный DataMatrix.
+   */
+  truncation: string[];
 }
 
 /** Убирает префиксы FNC1, унифицирует GS, чинит русскую раскладку и невидимые символы. */
@@ -161,21 +167,22 @@ export function parseDataMatrix(input: string): ParsedMark {
   const gtin = ais["01"] ?? null;
   const serial = ais["21"] ?? null;
 
+  const truncation: string[] = [];
   if (!gtin) issues.push("Нет GTIN (AI 01) — это не код маркировки");
   else if (!isValidGtin(gtin)) issues.push(`GTIN ${gtin} не проходит проверку контрольной цифры`);
   if (!serial) issues.push("Нет серийного номера (AI 21)");
   else if (serial.length !== 13) {
-    issues.push(`Серийный номер длиной ${serial.length}, для парфюмерии/косметики ожидается 13`);
+    truncation.push(`серийный номер длиной ${serial.length} вместо 13`);
   }
   if (serial && /[^!-~]/.test(serial)) {
     issues.push("Серийный номер содержит недопустимые символы — вероятно, скан повреждён");
   }
   if (gtin && serial && !ais["91"] && !ais["92"] && !ais["93"]) {
-    issues.push("Нет криптохвоста (AI 91/92/93) — отсканирован сокращённый код, для приёмки/продажи нужен полный DataMatrix");
+    truncation.push("нет криптохвоста (AI 91/92/93)");
   }
 
   const identityCode = gtin && serial ? `01${gtin}21${serial}` : null;
-  return { raw, gtin, serial, ais, identityCode, issues };
+  return { raw, gtin, serial, ais, identityCode, issues, truncation };
 }
 
 /** Полный код в base64 — формат, который принимает True API (cises/info, codes/check). */

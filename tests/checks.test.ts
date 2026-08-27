@@ -117,6 +117,29 @@ test("немаркируемый товар не трогаем", () => {
   assert.equal(trafficLight(findings), "green");
 });
 
+test("розничная продажа: касса сохраняет обрезанный код — НЕ ошибка (ККТ/ЧЗ уже проверили)", () => {
+  // Касса МойСклад пишет в retaildemand серийник 6 симв. и без криптохвоста.
+  const findings = checkDocument({
+    docType: "retaildemand",
+    positions: [
+      gelPolish({ quantity: 2, trackingCodes: [`01${GTIN}21A1B2C3`, `01${GTIN}21D4E5F6`] }),
+    ],
+  });
+  assert.ok(!findings.some((f) => f.code === "BAD_CODE" || f.code === "TRUNCATED_CODE"));
+  assert.equal(trafficLight(findings), "green");
+});
+
+test("отгрузка с сокращённым кодом — предупреждение, не блок", () => {
+  const findings = checkDocument({
+    docType: "demand",
+    positions: [gelPolish({ quantity: 1, trackingCodes: [`01${GTIN}21A1B2C3`] })],
+  });
+  const f = findings.find((x) => x.code === "TRUNCATED_CODE");
+  assert.ok(f);
+  assert.equal(f!.severity, "warn");
+  assert.equal(trafficLight(findings), "yellow");
+});
+
 test("битый скан в позиции — блок с инструкцией", () => {
   const findings = checkDocument({
     docType: "retaildemand",
