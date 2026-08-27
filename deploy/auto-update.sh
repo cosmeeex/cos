@@ -11,7 +11,10 @@ BRANCH=$(git rev-parse --abbrev-ref HEAD)
 git fetch origin "$BRANCH" --quiet
 LOCAL=$(git rev-parse HEAD)
 REMOTE=$(git rev-parse "origin/$BRANCH")
-[ "$LOCAL" = "$REMOTE" ] && exit 0
+# Сверяем не только git, но и версию работающего процесса: файлы могли
+# обновить вручную (git pull) без перезапуска сервиса.
+RUNNING=$(curl -sf -m 5 "http://127.0.0.1:$PORT/health" | grep -o '"version":"[a-f0-9]*"' | cut -d'"' -f4 || true)
+[ "$LOCAL" = "$REMOTE" ] && [ "$RUNNING" = "${REMOTE:0:7}" ] && exit 0
 
 notify_fail() {
   # В Telegram — только при неудаче, чтобы не шуметь в группе сотрудников.
