@@ -19,11 +19,34 @@ import { SignQueue } from "./crpt/signqueue.ts";
 
 const DATA_DIR = process.env.DATA_DIR ?? "data";
 
+const DOC_TYPE_RU: Record<string, string> = {
+  demand: "Отгрузка",
+  retaildemand: "Розничная продажа",
+  supply: "Приёмка",
+  retireorder: "Вывод из оборота",
+  loss: "Списание",
+  enter: "Оприходование",
+  salesreturn: "Возврат покупателя",
+  retailsalesreturn: "Возврат розничной продажи",
+  customerorder: "Заказ покупателя",
+  emissionorder: "Заказ кодов маркировки",
+};
+
+export function docTypeRu(t: string): string {
+  return DOC_TYPE_RU[t] ?? t;
+}
+
+/** Ссылка на документ в интерфейсе МойСклад. */
+export function msUiUrl(docType: string, docId: string): string {
+  return `https://online.moysklad.ru/app/#${docType}/edit?id=${docId}`;
+}
+
 interface CheckRecord {
   at: string;
   docType: string;
   docId: string;
   docName: string;
+  storeName?: string;
   light: "green" | "yellow" | "red";
   findings: Finding[];
 }
@@ -102,6 +125,19 @@ export function startServer(): void {
   const signQueue = new SignQueue();
   loadRecent();
 
+  // Карта складов id → имя (для алертов); обновляется раз в час.
+  const storeNames = new Map<string, string>();
+  async function refreshStores(): Promise<void> {
+    if (!ms) return;
+    try {
+      for (const s of await ms.stores()) storeNames.set(s.id ?? idFromHref(s.meta.href), s.name ?? "");
+    } catch {
+      // не критично — алерт уйдёт без имени склада
+    }
+  }
+  void refreshStores();
+  setInterval(refreshStores, 3600_000).unref();
+
   const queue: Array<{ docType: string; docId: string }> = [];
   let processing = false;
 
@@ -121,11 +157,14 @@ export function startServer(): void {
             continue;
           }
           const findings = checkDocument(view);
+          const storeHref = (doc.store as { meta?: { href?: string } } | undefined)?.meta?.href;
+          const storeName = storeHref ? storeNames.get(idFromHref(storeHref)) : undefined;
           const record: CheckRecord = {
             at: new Date().toISOString(),
             docType,
             docId,
             docName: doc.name ?? docId,
+            storeName,
             light: trafficLight(findings),
             findings,
           };
@@ -139,7 +178,15 @@ export function startServer(): void {
               .map((f) => `— ${f.message}\n  ${f.action}`)
               .join("\n");
             await notifier.send(
-              `🔴 Маркировка: документ ${docType} «${record.docName}» содержит блокирующие ошибки:\n${top}`,
+              [
+                `🔴 Маркировка: ${docTypeRu(docType)} № ${record.docName}`,
+                record.storeName ? `Склад: ${record.storeName}` : null,
+                `Открыть: ${msUiUrl(docType, docId)}`,
+                ``,
+                top,
+              ]
+                .filter((x) => x !== null)
+                .join("\n"),
             );
           }
         } catch (err) {
@@ -292,8 +339,9 @@ function renderDashboard(records: CheckRecord[], msConnected: boolean): string {
       return `<tr>
         <td>${LIGHT_EMOJI[r.light]}</td>
         <td>${new Date(r.at).toLocaleString("ru-RU")}</td>
-        <td>${r.docType}</td>
-        <td>${r.docName}</td>
+        <td>${docTypeRu(r.docType)}</td>
+        <td><a href="${msUiUrl(r.docType, r.docId)}" target="_blank">${r.docName}</a></td>
+        <td>${r.storeName ?? ""}</td>
         <td>${r.findings.length === 0 ? "ошибок нет" : `<details><summary>${r.findings.length} наход.</summary><ul>${details}</ul></details>`}</td>
       </tr>`;
     })
@@ -311,8 +359,8 @@ function renderDashboard(records: CheckRecord[], msConnected: boolean): string {
 </style></head><body>
 <h1>Страж маркировки — последние проверки документов</h1>
 <div class="status">МойСклад: ${msConnected ? "подключён ✅" : "не подключён ⚠️ (нет токена)"} · автообновление каждые 30 сек</div>
-<table><tr><th></th><th>Когда</th><th>Документ</th><th>Название</th><th>Находки</th></tr>
-${rows || "<tr><td colspan=5>Проверок ещё не было. Настройте вебхуки: node src/cli.ts setup-webhooks &lt;публичный URL&gt;</td></tr>"}
+<table><tr><th></th><th>Когда</th><th>Документ</th><th>Номер</th><th>Склад</th><th>Находки</th></tr>
+${rows || "<tr><td colspan=6>Проверок ещё не было. Настройте вебхуки: node src/cli.ts setup-webhooks &lt;публичный URL&gt;</td></tr>"}
 </table></body></html>`;
 }
 
