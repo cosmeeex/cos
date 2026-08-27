@@ -51,6 +51,19 @@ DRY_RUN=false node src/cli.ts setup-webhooks https://guard.cosmex.ru
 
 ## Обновление
 
+Автоматически: включите автообновление один раз —
+
+```bash
+bash /opt/cosmex-chestny-znak/deploy/install-auto-update.sh
+```
+
+Дальше сервер сам каждые 5 минут проверяет ветку на GitHub, подтягивает новые
+коммиты и перезапускает сервис (`cosmex-update.timer`). Если после обновления
+сервис не поднимается — автоматический откат на прежнюю версию и сообщение
+в Telegram. Текущая версия видна в `/health` (поле `version`).
+
+Вручную (если автообновление не включено):
+
 ```bash
 bash /opt/cosmex-chestny-znak/deploy/install.sh   # подтянет свежий код, прогонит тесты, перезапустит сервис
 ```

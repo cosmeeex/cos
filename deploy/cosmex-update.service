@@ -1,0 +1,9 @@
+[Unit]
+Description=Cosmex — автообновление стража из GitHub
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/cosmex-chestny-znak
+ExecStart=/usr/bin/bash deploy/auto-update.sh

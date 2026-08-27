@@ -19,6 +19,18 @@ import { SignQueue } from "./crpt/signqueue.ts";
 
 const DATA_DIR = process.env.DATA_DIR ?? "data";
 
+/** Хеш развёрнутого коммита — чтобы по /health было видно, какая версия работает. */
+function gitCommit(): string | null {
+  try {
+    const head = readFileSync(".git/HEAD", "utf8").trim();
+    if (!head.startsWith("ref:")) return head.slice(0, 7);
+    return readFileSync(join(".git", head.slice(5).trim()), "utf8").trim().slice(0, 7);
+  } catch {
+    return null;
+  }
+}
+const VERSION = gitCommit();
+
 const DOC_TYPE_RU: Record<string, string> = {
   demand: "Отгрузка",
   retaildemand: "Розничная продажа",
@@ -302,6 +314,7 @@ export function startServer(): void {
           .end(
             JSON.stringify({
               ok: true,
+              version: VERSION,
               moysklad: Boolean(ms),
               checks: recent.length,
               signQueue: signQueue.pending(),
