@@ -322,6 +322,46 @@ function cmdScan(code: string): void {
   }
 }
 
+async function cmdCisInfo(file?: string): Promise<void> {
+  const trueApi = makeTrueApi();
+  if (!trueApi) {
+    console.error(
+      "True API не настроен: нужен SIGNER_SECRET (офисный подписант должен быть онлайн) либо CRPT_SIGNER_CMD.",
+    );
+    process.exit(1);
+  }
+  if (!file) {
+    console.error("Использование: node src/cli.ts cis-info <файл-с-кодами>  (по одному коду в строке)");
+    process.exit(1);
+  }
+  const raw = readFileSync(file, "utf8")
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+  // Код идентификации (КИ) = 01+GTIN+21+serial — часть до первого разделителя GS (0x1d).
+  const kis = raw.map((l) => l.split("")[0]);
+  console.log(`Проверяю ${kis.length} кодов в ГИС МТ (cises/info)…`);
+  const infos = await trueApi.cisesInfo(kis);
+  const byStatus = new Map<string, number>();
+  const found = new Set<string>();
+  for (const inf of infos) {
+    if (!inf || typeof inf !== "object") continue;
+    const st = (inf.status as string) ?? "(нет статуса)";
+    byStatus.set(st, (byStatus.get(st) ?? 0) + 1);
+    if (inf.cis) found.add(String(inf.cis));
+    console.log(
+      `${String(inf.cis ?? "?").slice(0, 31)}  статус=${st}  ` +
+        `владелец=${inf.ownerInn ?? "—"} ${inf.ownerName ?? ""}  ${inf.productName ?? ""}`.trimEnd(),
+    );
+  }
+  console.log("\nИтого по статусам:");
+  for (const [st, n] of [...byStatus].sort((a, b) => b[1] - a[1])) console.log(`  ${st}: ${n}`);
+  const notFound = kis.filter((k) => ![...found].some((f) => k.startsWith(f) || f.startsWith(k)));
+  if (infos.length < kis.length || notFound.length > 0) {
+    console.log(`  НЕ НАЙДЕНО в ГИС МТ: ${Math.max(kis.length - infos.length, notFound.length)}`);
+  }
+}
+
 function cmdLabels(file: string, format: string): void {
   const codes = readFileSync(file, "utf8")
     .split(/\r?\n/)
@@ -495,6 +535,9 @@ switch (command) {
   case "scan":
     cmdScan(args.join(" "));
     break;
+  case "cis-info":
+    await cmdCisInfo(args[0]);
+    break;
   case "labels":
     cmdLabels(args[0], args[1] ?? "zpl");
     break;
@@ -521,6 +564,7 @@ switch (command) {
         "  node src/cli.ts reconcile",
         "  node src/cli.ts distance",
         "  node src/cli.ts scan <код>",
+        "  node src/cli.ts cis-info <файл-с-кодами>   # статус кодов в ГИС МТ (True API)",
         "  node src/cli.ts labels <файл-с-кодами> [zpl|tspl|csv]",
         "  node src/cli.ts dup-create <файл.csv>   # «название;кол-во» — дубли (немарк.)",
         "  node src/cli.ts dup-report [--close]    # состояние дублей, архив пустых",
