@@ -38,9 +38,13 @@ export async function resolveChatMigration(cfg: AppConfig): Promise<void> {
     /* файла нет — проверяем */
   }
   try {
-    const res = await fetch(
-      `https://api.telegram.org/bot${cfg.telegram.botToken}/getChat?chat_id=${encodeURIComponent(cfg.telegram.chatId)}`,
-    );
+    // getChat по старому id миграцию не выдаёт — а sendChatAction честно
+    // возвращает migrate_to_chat_id и ничего не постит в группу.
+    const res = await fetch(`https://api.telegram.org/bot${cfg.telegram.botToken}/sendChatAction`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: cfg.telegram.chatId, action: "typing" }),
+    });
     const body = await res.text();
     const migrated = /"migrate_to_chat_id":\s*(-?\d+)/.exec(body)?.[1];
     if (!res.ok && migrated) {
