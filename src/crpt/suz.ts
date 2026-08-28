@@ -44,17 +44,38 @@ export class SuzClient {
   private readonly http: HttpClient;
   private readonly signer: Signer;
   private readonly omsId: string;
-  private readonly omsToken: string;
+  /** Идентификатор соединения ОМС (из ЛК СУЗ). НЕ токен — токен получаем подписью. */
+  private readonly connectionId: string;
+  private token: string | null = null;
+  private tokenExpiresAt = 0;
 
-  constructor(http: HttpClient, signer: Signer, omsId: string, omsToken: string) {
+  constructor(http: HttpClient, signer: Signer, omsId: string, connectionId: string) {
     this.http = http;
     this.signer = signer;
     this.omsId = omsId;
-    this.omsToken = omsToken;
+    this.connectionId = connectionId;
   }
 
-  private headers(extra?: Record<string, string>): Record<string, string> {
-    return { clientToken: this.omsToken, ...extra };
+  /**
+   * Токен СУЗ выдаётся тем же «вызов-ответ», что и True API, но на своём хосте:
+   *   GET /auth/key → { uuid, data } → подпись УКЭП → POST /auth/simpleSignIn → { token }.
+   * Токен идёт в заголовке clientToken (живёт ~10 часов).
+   */
+  async ensureToken(): Promise<string> {
+    if (this.token && Date.now() < this.tokenExpiresAt - 60_000) return this.token;
+    const challenge = await this.http.get<{ uuid: string; data: string }>("/auth/key");
+    const signature = await this.signer.sign(challenge.data);
+    const res = await this.http.post<{ token: string }>("/auth/simpleSignIn", {
+      uuid: challenge.uuid,
+      data: signature,
+    });
+    this.token = res.token;
+    this.tokenExpiresAt = Date.now() + 9.5 * 3600 * 1000;
+    return this.token;
+  }
+
+  private async headers(extra?: Record<string, string>): Promise<Record<string, string>> {
+    return { clientToken: await this.ensureToken(), ...extra };
   }
 
   /** Создаёт заказ на эмиссию КМ. Возвращает orderId. */
@@ -65,7 +86,7 @@ export class SuzClient {
       "POST",
       `/order?omsId=${this.omsId}`,
       req,
-      this.headers({
+      await this.headers({
         "X-Signature": signature,
         productGroup,
       }),
@@ -77,7 +98,7 @@ export class SuzClient {
   async orderStatus(orderId: string, productGroup: string): Promise<OrderStatusPosition[]> {
     const res = await this.http.get<{ orderInfos?: Array<{ orderId: string; buffers?: OrderStatusPosition[]; orderStatus?: string }> }>(
       `/order/status?omsId=${this.omsId}&orderId=${orderId}`,
-      this.headers({ productGroup }),
+      await this.headers({ productGroup }),
     );
     const info = res.orderInfos?.find((o) => o.orderId === orderId) ?? res.orderInfos?.[0];
     return info?.buffers ?? [];
@@ -87,26 +108,16 @@ export class SuzClient {
   async getCodes(orderId: string, gtin: string, quantity: number, productGroup: string): Promise<string[]> {
     const res = await this.http.get<{ codes: string[] }>(
       `/codes?omsId=${this.omsId}&orderId=${orderId}&gtin=${gtin}&quantity=${quantity}`,
-      this.headers({ productGroup }),
+      await this.headers({ productGroup }),
     );
     return res.codes ?? [];
-  }
-
-  /** Пинг СУЗ — проверка связи и токена. */
-  async ping(productGroup: string): Promise<boolean> {
-    try {
-      await this.http.get(`/ping?omsId=${this.omsId}`, this.headers({ productGroup }));
-      return true;
-    } catch {
-      return false;
-    }
   }
 
   /** Детальный пинг: возвращает тело ответа СУЗ (для диагностики реквизитов/токена). */
   async pingInfo(productGroup: string): Promise<Record<string, unknown>> {
     return this.http.get<Record<string, unknown>>(
       `/ping?omsId=${this.omsId}`,
-      this.headers({ productGroup }),
+      await this.headers({ productGroup }),
     );
   }
 }
