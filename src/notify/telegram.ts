@@ -25,6 +25,34 @@ export function currentChatId(cfg: AppConfig): string | null {
   return cfg.telegram.chatId;
 }
 
+/**
+ * Разовая проверка на старте: если группа мигрировала в супергруппу,
+ * узнаём новый chat_id через getChat (без отправки сообщений) и сохраняем.
+ */
+export async function resolveChatMigration(cfg: AppConfig): Promise<void> {
+  if (!cfg.telegram.botToken || !cfg.telegram.chatId) return;
+  try {
+    readFileSync(CHAT_ID_FILE, "utf8");
+    return; // уже переехали
+  } catch {
+    /* файла нет — проверяем */
+  }
+  try {
+    const res = await fetch(
+      `https://api.telegram.org/bot${cfg.telegram.botToken}/getChat?chat_id=${encodeURIComponent(cfg.telegram.chatId)}`,
+    );
+    const body = await res.text();
+    const migrated = /"migrate_to_chat_id":\s*(-?\d+)/.exec(body)?.[1];
+    if (!res.ok && migrated) {
+      mkdirSync(DATA_DIR, { recursive: true });
+      writeFileSync(CHAT_ID_FILE, migrated);
+      console.warn(`Telegram: группа стала супергруппой, новый chat_id ${migrated}`);
+    }
+  } catch {
+    /* сеть/токен — не критично, миграция догонит при первой отправке */
+  }
+}
+
 export interface Notifier {
   send(text: string): Promise<void>;
 }

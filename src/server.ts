@@ -14,7 +14,7 @@ import { loadConfig, requireFor } from "./core/config.ts";
 import { MoyskladClient, idFromHref, type MsDocument, type DocumentPosition } from "./moysklad/client.ts";
 import { checkDocument, trafficLight, type DocumentView, type Finding } from "./guard/checks.ts";
 import { parseDataMatrix } from "./core/gs1.ts";
-import { makeNotifier, currentChatId } from "./notify/telegram.ts";
+import { makeNotifier, currentChatId, resolveChatMigration } from "./notify/telegram.ts";
 import { SignQueue } from "./crpt/signqueue.ts";
 
 const DATA_DIR = process.env.DATA_DIR ?? "data";
@@ -164,6 +164,7 @@ export function startServer(): void {
   const cfg = loadConfig();
   const missing = requireFor(cfg, "moysklad");
   const ms = missing.length === 0 ? new MoyskladClient(cfg.moysklad) : null;
+  void resolveChatMigration(cfg); // группа могла стать супергруппой — узнаём актуальный chat_id
   const notifier = makeNotifier(cfg);
   const signQueue = new SignQueue();
   loadRecent();
