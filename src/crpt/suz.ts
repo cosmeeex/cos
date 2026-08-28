@@ -101,4 +101,12 @@ export class SuzClient {
       return false;
     }
   }
+
+  /** Детальный пинг: возвращает тело ответа СУЗ (для диагностики реквизитов/токена). */
+  async pingInfo(productGroup: string): Promise<Record<string, unknown>> {
+    return this.http.get<Record<string, unknown>>(
+      `/ping?omsId=${this.omsId}`,
+      this.headers({ productGroup }),
+    );
+  }
 }

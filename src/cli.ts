@@ -25,6 +25,7 @@ import { parseDataMatrix } from "./core/gs1.ts";
 import { reconcile, renderReconcileMarkdown, type ChzStockLine } from "./reconcile/stocks.ts";
 import { checkDistanceRetirement, type DemandSummary, type RetireOrderSummary } from "./guard/distance.ts";
 import { TrueApiClient } from "./crpt/trueapi.ts";
+import { SuzClient } from "./crpt/suz.ts";
 import { ExternalSigner, StubSigner, RemoteSigner } from "./crpt/signer.ts";
 import { HttpClient } from "./core/http.ts";
 import { startServer } from "./server.ts";
@@ -86,6 +87,43 @@ function makeTrueApi(): TrueApiClient | null {
         new RemoteSigner(`http://127.0.0.1:${cfg.server.port}`, cfg.server.signerSecret)
       : new StubSigner();
   return new TrueApiClient(new HttpClient(cfg.crpt.trueApiUrl), signer, (l) => console.error(l));
+}
+
+function makeSuz(): SuzClient | null {
+  const cfg = loadConfig();
+  if (requireFor(cfg, "suz").length > 0) return null;
+  const signer = cfg.crpt.signerCmd
+    ? new ExternalSigner(cfg.crpt.signerCmd, cfg.crpt.certThumbprint)
+    : cfg.server.signerSecret
+      ? new RemoteSigner(`http://127.0.0.1:${cfg.server.port}`, cfg.server.signerSecret)
+      : new StubSigner();
+  return new SuzClient(new HttpClient(cfg.crpt.suzUrl), signer, cfg.crpt.omsId!, cfg.crpt.omsToken!);
+}
+
+async function cmdSuzPing(productGroup?: string): Promise<void> {
+  const cfg = loadConfig();
+  const miss = requireFor(cfg, "suz");
+  if (miss.length > 0) {
+    console.error(`СУЗ не настроен: не хватает ${miss.join(", ")}`);
+    process.exit(1);
+  }
+  const suz = makeSuz()!;
+  // Товарную группу крема заранее не знаем — пробуем кандидатов (космети/парфюм/антисептики и т.п.).
+  const groups = productGroup
+    ? [productGroup]
+    : ["ncp", "perfumery", "antiseptic", "cosmetics", "beauty", "chemistry", "bio"];
+  console.log(`СУЗ ping: omsId=${cfg.crpt.omsId}  url=${cfg.crpt.suzUrl}`);
+  let anyOk = false;
+  for (const pg of groups) {
+    try {
+      const info = await suz.pingInfo(pg);
+      console.log(`✅ [${pg}] ответ СУЗ: ${JSON.stringify(info)}`);
+      anyOk = true;
+    } catch (err) {
+      console.log(`✕ [${pg}] ${(err as Error).message.slice(0, 160)}`);
+    }
+  }
+  if (!anyOk) process.exit(1);
 }
 
 async function fetchAuditable(ms: MoyskladClient): Promise<AuditableProduct[]> {
@@ -538,6 +576,9 @@ switch (command) {
   case "cis-info":
     await cmdCisInfo(args[0]);
     break;
+  case "suz-ping":
+    await cmdSuzPing(args[0]);
+    break;
   case "labels":
     cmdLabels(args[0], args[1] ?? "zpl");
     break;
@@ -565,6 +606,7 @@ switch (command) {
         "  node src/cli.ts distance",
         "  node src/cli.ts scan <код>",
         "  node src/cli.ts cis-info <файл-с-кодами>   # статус кодов в ГИС МТ (True API)",
+        "  node src/cli.ts suz-ping [productGroup]    # проверка связи и реквизитов СУЗ",
         "  node src/cli.ts labels <файл-с-кодами> [zpl|tspl|csv]",
         "  node src/cli.ts dup-create <файл.csv>   # «название;кол-во» — дубли (немарк.)",
         "  node src/cli.ts dup-report [--close]    # состояние дублей, архив пустых",
