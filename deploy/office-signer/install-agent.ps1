@@ -53,13 +53,16 @@ if ($certs.Count -eq 1) {
     $n = Read-Host "Введите номер сертификата организации"
     $cert = $certs[[int]$n - 1]
 }
-# Фрагмент CN для csptest -my
+# Для csptest -my используем ОТПЕЧАТОК (thumbprint) — он из латинских
+# символов, поэтому не ломается о кодировку консоли, в отличие от CN с
+# кириллицей («НО РОДИОН НАМСЕПОВИЧ» → csptest получал кракозябры).
 $cn = ($cert.Subject -split ",\s*" | Where-Object { $_ -like "CN=*" } | Select-Object -First 1) -replace "^CN=", ""
 if (-not $cn) { $cn = $cert.Subject }
-Write-Host "    выбран: $cn"
+$thumb = $cert.Thumbprint
+Write-Host "    выбран: $cn  (отпечаток $thumb)"
 
 Step "5/6 Записываю настройки и проверяю подпись"
-@{ GuardUrl = $GuardUrl; Secret = $Secret; CertName = $cn; CspTest = $CspTest } |
+@{ GuardUrl = $GuardUrl; Secret = $Secret; CertName = $thumb; CertSubject = $cn; CspTest = $CspTest } |
     ConvertTo-Json | Set-Content -Path (Join-Path $Dir "agent-config.json") -Encoding UTF8
 & powershell -ExecutionPolicy Bypass -File (Join-Path $Dir "agent.ps1") -Test
 if ($LASTEXITCODE -ne 0) {
