@@ -19,6 +19,19 @@ import { SignQueue } from "./crpt/signqueue.ts";
 
 const DATA_DIR = process.env.DATA_DIR ?? "data";
 
+/** Сообщение Telegram (минимальный срез полей, которые нам нужны). */
+interface TgMessage {
+  message_id: number;
+  date: number;
+  chat?: { id: number };
+  from?: { first_name?: string; last_name?: string; username?: string };
+  text?: string;
+  caption?: string;
+  document?: { file_id: string; file_name?: string; mime_type?: string };
+  photo?: Array<{ file_id: string }>;
+  reply_to_message?: { message_id: number };
+}
+
 /** Хеш развёрнутого коммита — чтобы по /health было видно, какая версия работает. */
 function gitCommit(): string | null {
   try {
@@ -213,6 +226,65 @@ export function startServer(): void {
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     const url = new URL(req.url ?? "/", "http://localhost");
     try {
+      // ---------- Telegram: приём сообщений группы (бот — админ группы) ----------
+      // Вебхук: POST /webhook/telegram (подлинность — по секретному заголовку Telegram).
+      if (req.method === "POST" && url.pathname === "/webhook/telegram") {
+        const tgSecret = req.headers["x-telegram-bot-api-secret-token"];
+        if (!cfg.server.webhookSecret || tgSecret !== cfg.server.webhookSecret) {
+          res.writeHead(403).end();
+          return;
+        }
+        const body = await readBody(req);
+        res.writeHead(200).end();
+        try {
+          const upd = JSON.parse(body) as {
+            update_id: number;
+            message?: TgMessage;
+            edited_message?: TgMessage;
+          };
+          const msg = upd.message ?? upd.edited_message;
+          if (msg && cfg.telegram.chatId && String(msg.chat?.id) === String(cfg.telegram.chatId)) {
+            const photo = msg.photo?.length ? msg.photo[msg.photo.length - 1] : undefined;
+            const rec = {
+              update_id: upd.update_id,
+              message_id: msg.message_id,
+              date: msg.date,
+              from: `${msg.from?.first_name ?? ""} ${msg.from?.last_name ?? ""}`.trim() || msg.from?.username || "?",
+              text: msg.text ?? msg.caption ?? "",
+              file: msg.document
+                ? { file_id: msg.document.file_id, name: msg.document.file_name ?? "", mime: msg.document.mime_type ?? "" }
+                : photo
+                  ? { file_id: photo.file_id, name: "photo.jpg", mime: "image/jpeg" }
+                  : undefined,
+              reply_to: msg.reply_to_message?.message_id,
+            };
+            mkdirSync(DATA_DIR, { recursive: true });
+            appendFileSync(join(DATA_DIR, "tg-inbox.jsonl"), JSON.stringify(rec) + "\n");
+          }
+        } catch {
+          console.error("Telegram-вебхук: невалидный JSON");
+        }
+        return;
+      }
+
+      // Чтение входящих: GET /webhook/telegram/{секрет}/inbox?after=<update_id>
+      if (req.method === "GET" && url.pathname === `/webhook/telegram/${cfg.server.webhookSecret}/inbox` && cfg.server.webhookSecret) {
+        const after = Number(url.searchParams.get("after") ?? 0);
+        let rows: unknown[] = [];
+        try {
+          rows = readFileSync(join(DATA_DIR, "tg-inbox.jsonl"), "utf8")
+            .split("\n")
+            .filter(Boolean)
+            .map((l) => JSON.parse(l) as { update_id: number })
+            .filter((r) => r.update_id > after)
+            .slice(-300);
+        } catch {
+          rows = [];
+        }
+        res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ rows }));
+        return;
+      }
+
       // Вебхуки МойСклад: /webhook/{секрет}/{entityType}/{action}
       // (секрет также принимается query-параметром для обратной совместимости).
       if (req.method === "POST" && url.pathname.startsWith("/webhook")) {
