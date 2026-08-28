@@ -29,7 +29,25 @@ interface TgMessage {
   caption?: string;
   document?: { file_id: string; file_name?: string; mime_type?: string };
   photo?: Array<{ file_id: string }>;
+  video?: { file_id: string; mime_type?: string };
+  video_note?: { file_id: string };
+  voice?: { file_id: string; mime_type?: string };
+  audio?: { file_id: string; file_name?: string; mime_type?: string };
+  animation?: { file_id: string; file_name?: string; mime_type?: string };
+  sticker?: { emoji?: string };
   reply_to_message?: { message_id: number };
+}
+
+/** Единый взгляд на вложение сообщения Telegram (что скачивать через getFile). */
+function tgAttachment(msg: TgMessage): { file_id: string; name: string; mime: string } | undefined {
+  if (msg.document) return { file_id: msg.document.file_id, name: msg.document.file_name ?? "file", mime: msg.document.mime_type ?? "" };
+  if (msg.photo?.length) return { file_id: msg.photo[msg.photo.length - 1].file_id, name: "photo.jpg", mime: "image/jpeg" };
+  if (msg.video) return { file_id: msg.video.file_id, name: "video.mp4", mime: msg.video.mime_type ?? "video/mp4" };
+  if (msg.video_note) return { file_id: msg.video_note.file_id, name: "video_note.mp4", mime: "video/mp4" };
+  if (msg.voice) return { file_id: msg.voice.file_id, name: "voice.ogg", mime: msg.voice.mime_type ?? "audio/ogg" };
+  if (msg.audio) return { file_id: msg.audio.file_id, name: msg.audio.file_name ?? "audio", mime: msg.audio.mime_type ?? "" };
+  if (msg.animation) return { file_id: msg.animation.file_id, name: msg.animation.file_name ?? "animation.mp4", mime: msg.animation.mime_type ?? "" };
+  return undefined;
 }
 
 /** Хеш развёрнутого коммита — чтобы по /health было видно, какая версия работает. */
@@ -244,18 +262,13 @@ export function startServer(): void {
           };
           const msg = upd.message ?? upd.edited_message;
           if (msg && cfg.telegram.chatId && String(msg.chat?.id) === String(cfg.telegram.chatId)) {
-            const photo = msg.photo?.length ? msg.photo[msg.photo.length - 1] : undefined;
             const rec = {
               update_id: upd.update_id,
               message_id: msg.message_id,
               date: msg.date,
               from: `${msg.from?.first_name ?? ""} ${msg.from?.last_name ?? ""}`.trim() || msg.from?.username || "?",
-              text: msg.text ?? msg.caption ?? "",
-              file: msg.document
-                ? { file_id: msg.document.file_id, name: msg.document.file_name ?? "", mime: msg.document.mime_type ?? "" }
-                : photo
-                  ? { file_id: photo.file_id, name: "photo.jpg", mime: "image/jpeg" }
-                  : undefined,
+              text: msg.text ?? msg.caption ?? (msg.sticker ? `(стикер ${msg.sticker.emoji ?? ""})` : ""),
+              file: tgAttachment(msg),
               reply_to: msg.reply_to_message?.message_id,
             };
             mkdirSync(DATA_DIR, { recursive: true });
