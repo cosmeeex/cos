@@ -14,7 +14,7 @@ import { loadConfig, requireFor } from "./core/config.ts";
 import { MoyskladClient, idFromHref, type MsDocument, type DocumentPosition } from "./moysklad/client.ts";
 import { checkDocument, trafficLight, type DocumentView, type Finding } from "./guard/checks.ts";
 import { parseDataMatrix } from "./core/gs1.ts";
-import { makeNotifier } from "./notify/telegram.ts";
+import { makeNotifier, currentChatId } from "./notify/telegram.ts";
 import { SignQueue } from "./crpt/signqueue.ts";
 
 const DATA_DIR = process.env.DATA_DIR ?? "data";
@@ -261,7 +261,8 @@ export function startServer(): void {
             edited_message?: TgMessage;
           };
           const msg = upd.message ?? upd.edited_message;
-          if (msg && cfg.telegram.chatId && String(msg.chat?.id) === String(cfg.telegram.chatId)) {
+          const groupId = currentChatId(cfg);
+          if (msg && groupId && String(msg.chat?.id) === String(groupId)) {
             const rec = {
               update_id: upd.update_id,
               message_id: msg.message_id,
