@@ -97,7 +97,16 @@ function makeSuz(): SuzClient | null {
     : cfg.server.signerSecret
       ? new RemoteSigner(`http://127.0.0.1:${cfg.server.port}`, cfg.server.signerSecret)
       : new StubSigner();
-  return new SuzClient(new HttpClient(cfg.crpt.suzUrl), signer, cfg.crpt.omsId!, cfg.crpt.omsToken!);
+  // clientToken для СУЗ = токен True API (markirovka) — тот же, что работает в cis-info.
+  const trueApi = makeTrueApi();
+  if (!trueApi) return null;
+  return new SuzClient(
+    new HttpClient(cfg.crpt.suzUrl),
+    signer,
+    cfg.crpt.omsId!,
+    cfg.crpt.omsToken!,
+    () => trueApi.ensureToken(),
+  );
 }
 
 async function cmdSuzPing(productGroup?: string): Promise<void> {

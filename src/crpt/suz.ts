@@ -44,34 +44,30 @@ export class SuzClient {
   private readonly http: HttpClient;
   private readonly signer: Signer;
   private readonly omsId: string;
-  /** Идентификатор соединения ОМС (из ЛК СУЗ). НЕ токен — токен получаем подписью. */
+  /** Идентификатор соединения ОМС (из ЛК СУЗ). Идёт параметром, не токеном. */
   private readonly connectionId: string;
-  private token: string | null = null;
-  private tokenExpiresAt = 0;
+  /** Провайдер токена. СУЗ (ОМС) авторизуется ТОКЕНОМ True API (markirovka), а не
+   *  собственным auth на suzgrid: свой suzgrid/auth/simpleSignIn даёт 4035
+   *  «сервис-провайдер не найден» — этот путь для операторов, не для участника-ОМС. */
+  private readonly getClientToken: () => Promise<string>;
 
-  constructor(http: HttpClient, signer: Signer, omsId: string, connectionId: string) {
+  constructor(
+    http: HttpClient,
+    signer: Signer,
+    omsId: string,
+    connectionId: string,
+    getClientToken: () => Promise<string>,
+  ) {
     this.http = http;
     this.signer = signer;
     this.omsId = omsId;
     this.connectionId = connectionId;
+    this.getClientToken = getClientToken;
   }
 
-  /**
-   * Токен СУЗ выдаётся тем же «вызов-ответ», что и True API, но на своём хосте:
-   *   GET /auth/key → { uuid, data } → подпись УКЭП → POST /auth/simpleSignIn → { token }.
-   * Токен идёт в заголовке clientToken (живёт ~10 часов).
-   */
+  /** Токен для заголовка clientToken — берём из True API (тот же, что для cises/info). */
   async ensureToken(): Promise<string> {
-    if (this.token && Date.now() < this.tokenExpiresAt - 60_000) return this.token;
-    const challenge = await this.http.get<{ uuid: string; data: string }>("/auth/key");
-    const signature = await this.signer.sign(challenge.data);
-    const res = await this.http.post<{ token: string }>("/auth/simpleSignIn", {
-      uuid: challenge.uuid,
-      data: signature,
-    });
-    this.token = res.token;
-    this.tokenExpiresAt = Date.now() + 9.5 * 3600 * 1000;
-    return this.token;
+    return this.getClientToken();
   }
 
   private async headers(extra?: Record<string, string>): Promise<Record<string, string>> {
