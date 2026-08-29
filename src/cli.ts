@@ -117,19 +117,24 @@ async function cmdSuzPing(productGroup?: string): Promise<void> {
     process.exit(1);
   }
   const suz = makeSuz()!;
-  // Товарную группу крема заранее не знаем — пробуем кандидатов (космети/парфюм/антисептики и т.п.).
-  const groups = productGroup
-    ? [productGroup]
-    : ["ncp", "perfumery", "antiseptic", "cosmetics", "beauty", "chemistry", "bio"];
-  console.log(`СУЗ ping: omsId=${cfg.crpt.omsId}  url=${cfg.crpt.suzUrl}`);
+  const groups = productGroup ? [productGroup] : ["ncp", "perfumery", "beauty"];
+  // 1090 не про токен — проверяем, не перепутаны ли omsId/connectionId: пробуем ОБА UUID как omsId.
+  const omsCandidates = [
+    { label: "CRPT_OMS_ID", val: cfg.crpt.omsId! },
+    { label: "CRPT_OMS_TOKEN(connectionId)", val: cfg.crpt.omsToken! },
+  ].filter((c, i, a) => a.findIndex((x) => x.val === c.val) === i);
+  console.log(`СУЗ ping: url=${cfg.crpt.suzUrl}`);
   let anyOk = false;
-  for (const pg of groups) {
-    try {
-      const info = await suz.pingInfo(pg);
-      console.log(`✅ [${pg}] ответ СУЗ: ${JSON.stringify(info)}`);
-      anyOk = true;
-    } catch (err) {
-      console.log(`✕ [${pg}] ${(err as Error).message.slice(0, 160)}`);
+  for (const oms of omsCandidates) {
+    console.log(`\n— omsId = ${oms.val}  (${oms.label})`);
+    for (const pg of groups) {
+      try {
+        const info = await suz.pingInfo(pg, oms.val);
+        console.log(`  ✅ [${pg}] ответ СУЗ: ${JSON.stringify(info)}`);
+        anyOk = true;
+      } catch (err) {
+        console.log(`  ✕ [${pg}] ${(err as Error).message.slice(0, 160)}`);
+      }
     }
   }
   if (!anyOk) process.exit(1);

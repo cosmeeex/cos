@@ -109,10 +109,11 @@ export class SuzClient {
     return res.codes ?? [];
   }
 
-  /** Детальный пинг: возвращает тело ответа СУЗ (для диагностики реквизитов/токена). */
-  async pingInfo(productGroup: string): Promise<Record<string, unknown>> {
+  /** Детальный пинг: возвращает тело ответа СУЗ (для диагностики реквизитов/токена).
+   *  omsIdOverride — чтобы проверить, не перепутаны ли omsId/connectionId. */
+  async pingInfo(productGroup: string, omsIdOverride?: string): Promise<Record<string, unknown>> {
     return this.http.get<Record<string, unknown>>(
-      `/ping?omsId=${this.omsId}`,
+      `/ping?omsId=${omsIdOverride ?? this.omsId}`,
       await this.headers({ productGroup }),
     );
   }
