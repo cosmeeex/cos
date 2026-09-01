@@ -120,6 +120,13 @@ async function readBody(req: IncomingMessage): Promise<string> {
   return Buffer.concat(chunks).toString("utf8");
 }
 
+/** Сырое тело запроса (для бинарных загрузок — например PDF на отправку в Telegram). */
+async function readBodyBuffer(req: IncomingMessage): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of req) chunks.push(chunk as Buffer);
+  return Buffer.concat(chunks);
+}
+
 /** Собирает DocumentView из документа МойСклад для стража. */
 async function toDocumentView(
   ms: MoyskladClient,
@@ -334,6 +341,53 @@ export function startServer(): void {
           res.writeHead(200, { "Content-Type": ct }).end(buf);
         } catch {
           res.writeHead(502).end("ошибка загрузки файла");
+        }
+        return;
+      }
+
+      // Отправка в группу от бота: POST /webhook/telegram/{секрет}/send
+      //   - ?text=... (или JSON {text}) -> sendMessage;
+      //   - тело = файл + ?filename=&caption= -> sendDocument.
+      // Токен бота берётся на сервере из .env; доступ закрыт секретом вебхука.
+      if (req.method === "POST" && url.pathname === `/webhook/telegram/${cfg.server.webhookSecret}/send` && cfg.server.webhookSecret) {
+        const token = cfg.telegram.botToken;
+        const chatId = currentChatId(cfg);
+        if (!token || !chatId) {
+          res.writeHead(400).end("нет токена бота или chat_id");
+          return;
+        }
+        const filename = url.searchParams.get("filename");
+        try {
+          if (filename) {
+            const caption = url.searchParams.get("caption") ?? "";
+            const buf = await readBodyBuffer(req);
+            const fd = new FormData();
+            fd.append("chat_id", chatId);
+            if (caption) fd.append("caption", caption);
+            fd.append("document", new Blob([buf]), filename);
+            const r = await fetch(`https://api.telegram.org/bot${token}/sendDocument`, { method: "POST", body: fd });
+            const t = await r.text();
+            res.writeHead(r.ok ? 200 : 502, { "Content-Type": "application/json" }).end(t);
+          } else {
+            const raw = await readBody(req);
+            let text = url.searchParams.get("text") ?? "";
+            if (!text && raw) {
+              try {
+                text = (JSON.parse(raw) as { text?: string }).text ?? raw;
+              } catch {
+                text = raw;
+              }
+            }
+            const r = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ chat_id: chatId, text, disable_web_page_preview: true }),
+            });
+            const t = await r.text();
+            res.writeHead(r.ok ? 200 : 502, { "Content-Type": "application/json" }).end(t);
+          }
+        } catch {
+          res.writeHead(502).end("ошибка отправки в Telegram");
         }
         return;
       }
