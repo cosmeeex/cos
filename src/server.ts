@@ -300,6 +300,44 @@ export function startServer(): void {
         return;
       }
 
+      // Скачивание вложения Telegram по file_id: GET /webhook/telegram/{секрет}/file?file_id=...
+      // Токен бота читается на сервере (из .env) и наружу не отдаётся; доступ закрыт секретом вебхука.
+      if (req.method === "GET" && url.pathname === `/webhook/telegram/${cfg.server.webhookSecret}/file` && cfg.server.webhookSecret) {
+        const fileId = url.searchParams.get("file_id");
+        const token = cfg.telegram.botToken;
+        if (!fileId || !token) {
+          res.writeHead(400).end("нужны file_id и токен бота");
+          return;
+        }
+        try {
+          const metaRes = await fetch(`https://api.telegram.org/bot${token}/getFile?file_id=${encodeURIComponent(fileId)}`);
+          const meta = (await metaRes.json()) as { ok: boolean; result?: { file_path?: string } };
+          const filePath = meta.result?.file_path;
+          if (!meta.ok || !filePath) {
+            res.writeHead(404).end("файл не найден в Telegram");
+            return;
+          }
+          const binRes = await fetch(`https://api.telegram.org/file/bot${token}/${filePath}`);
+          if (!binRes.ok) {
+            res.writeHead(502).end("не удалось скачать файл из Telegram");
+            return;
+          }
+          const buf = Buffer.from(await binRes.arrayBuffer());
+          const ext = filePath.split(".").pop()?.toLowerCase() ?? "";
+          const ct =
+            ext === "jpg" || ext === "jpeg" ? "image/jpeg"
+            : ext === "png" ? "image/png"
+            : ext === "pdf" ? "application/pdf"
+            : ext === "mp4" ? "video/mp4"
+            : ext === "ogg" || ext === "oga" ? "audio/ogg"
+            : "application/octet-stream";
+          res.writeHead(200, { "Content-Type": ct }).end(buf);
+        } catch {
+          res.writeHead(502).end("ошибка загрузки файла");
+        }
+        return;
+      }
+
       // Вебхуки МойСклад: /webhook/{секрет}/{entityType}/{action}
       // (секрет также принимается query-параметром для обратной совместимости).
       if (req.method === "POST" && url.pathname.startsWith("/webhook")) {
