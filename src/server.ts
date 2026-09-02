@@ -16,6 +16,7 @@ import { checkDocument, trafficLight, type DocumentView, type Finding } from "./
 import { parseDataMatrix } from "./core/gs1.ts";
 import { makeNotifier, currentChatId, resolveChatMigration } from "./notify/telegram.ts";
 import { SignQueue } from "./crpt/signqueue.ts";
+import { spawn } from "node:child_process";
 
 const DATA_DIR = process.env.DATA_DIR ?? "data";
 
@@ -125,6 +126,36 @@ async function readBodyBuffer(req: IncomingMessage): Promise<Buffer> {
   const chunks: Buffer[] = [];
   for await (const chunk of req) chunks.push(chunk as Buffer);
   return Buffer.concat(chunks);
+}
+
+/**
+ * Запуск shell-команды с таймаутом; возвращает объединённый stdout+stderr и код.
+ * Используется единственным ops-маршрутом (боевой dry-run Ozon) — команда
+ * жёстко зашита в маршруте, пользовательский ввод в шелл не попадает.
+ */
+function runShell(cmd: string, timeoutMs: number): Promise<{ code: number; out: string }> {
+  return new Promise((resolve) => {
+    const child = spawn("/bin/bash", ["-c", cmd], { stdio: ["ignore", "pipe", "pipe"] });
+    let out = "";
+    const cap = (b: Buffer) => {
+      out += b.toString("utf8");
+      if (out.length > 200_000) out = out.slice(-200_000); // не раздуваем ответ
+    };
+    child.stdout.on("data", cap);
+    child.stderr.on("data", cap);
+    const timer = setTimeout(() => {
+      out += `\n[timeout ${timeoutMs} ms — процесс остановлен]\n`;
+      child.kill("SIGKILL");
+    }, timeoutMs);
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      resolve({ code: code ?? -1, out });
+    });
+    child.on("error", (e) => {
+      clearTimeout(timer);
+      resolve({ code: -1, out: out + `\n[ошибка запуска: ${String(e)}]\n` });
+    });
+  });
 }
 
 /** Собирает DocumentView из документа МойСклад для стража. */
@@ -389,6 +420,37 @@ export function startServer(): void {
         } catch {
           res.writeHead(502).end("ошибка отправки в Telegram");
         }
+        return;
+      }
+
+      // Боевой DRY-RUN передачи кодов «Честный знак» в Ozon:
+      //   POST /ops/{секрет}/ozon-dryrun[?cab=<id>]
+      // Маркетплейс-приложение (/opt/seo-bot) живёт на этом же сервере. Команда
+      // ЖЁСТКО зашита: git pull + запуск dryrun_ozon_marking.py, который ничего
+      // не отправляет в Ozon и не пишет в МойСклад (только логирует, что ушло бы).
+      // Единственный пользовательский ввод — cab (кабинет), строго валидируется,
+      // так что инъекция в шелл невозможна. Доступ закрыт секретом вебхука.
+      if (
+        req.method === "POST" &&
+        url.pathname === `/ops/${cfg.server.webhookSecret}/ozon-dryrun` &&
+        cfg.server.webhookSecret
+      ) {
+        const cab = url.searchParams.get("cab") ?? "";
+        if (cab && !/^[A-Za-z0-9_-]{1,40}$/.test(cab)) {
+          res.writeHead(400, { "Content-Type": "text/plain; charset=utf-8" })
+            .end("cab: допустимы только буквы/цифры/-/_ (до 40)");
+          return;
+        }
+        const app = "/opt/seo-bot";
+        // set -a + source .env → доступы Ozon/МойСклад подхватятся, как в сервисе.
+        const cmd =
+          `cd ${app} 2>&1 && ` +
+          `{ git pull --ff-only 2>&1 || echo "[warn] git pull не прошёл — работаю на текущем коде"; } && ` +
+          `set -a; [ -f .env ] && . ./.env; set +a; ` +
+          `python3 dryrun_ozon_marking.py ${cab}`;
+        const { code, out } = await runShell(cmd, 180_000);
+        res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" })
+          .end(`exit=${code}\n\n${out}`);
         return;
       }
 
