@@ -424,15 +424,17 @@ export function startServer(): void {
       }
 
       // Боевой DRY-RUN передачи кодов «Честный знак» в Ozon:
-      //   POST /ops/{секрет}/ozon-dryrun[?cab=<id>]
-      // Маркетплейс-приложение (/opt/seo-bot) живёт на этом же сервере. Команда
-      // ЖЁСТКО зашита: git pull + запуск dryrun_ozon_marking.py, который ничего
-      // не отправляет в Ozon и не пишет в МойСклад (только логирует, что ушло бы).
-      // Единственный пользовательский ввод — cab (кабинет), строго валидируется,
-      // так что инъекция в шелл невозможна. Доступ закрыт секретом вебхука.
+      //   POST /webhook/telegram/{секрет}/ozon-dryrun[?cab=<id>]
+      // Путь под /webhook/telegram/, потому что nginx проксирует на гвард только
+      // этот префикс (произвольный /ops/ он режет 401-м). Маркетплейс-приложение
+      // (/opt/seo-bot) живёт на этом же сервере. Команда ЖЁСТКО зашита: git pull +
+      // запуск dryrun_ozon_marking.py, который ничего не отправляет в Ozon и не
+      // пишет в МойСклад (только логирует, что ушло бы). Единственный
+      // пользовательский ввод — cab (кабинет), строго валидируется, так что
+      // инъекция в шелл невозможна. Доступ закрыт секретом вебхука.
       if (
         req.method === "POST" &&
-        url.pathname === `/ops/${cfg.server.webhookSecret}/ozon-dryrun` &&
+        url.pathname === `/webhook/telegram/${cfg.server.webhookSecret}/ozon-dryrun` &&
         cfg.server.webhookSecret
       ) {
         const cab = url.searchParams.get("cab") ?? "";
