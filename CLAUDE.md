@@ -92,14 +92,18 @@
   «Готов, Собран» отсеялись штатно (Ozon `awaiting_deliver` ≠ нужного `awaiting_packaging`) → `[DRY]`-строк
   нет, т.к. подходящего заказа сейчас нет. Чтобы увидеть коды — дождаться живого заказа Ozon
   «Ожидает сборки» с маркир. товаром, отсканировать DataMatrix в «Отгрузку» МС, повторить.
-- **Ветки маркетплейсов сведены на master (02.09, `b0e42b4`):** прод сидел на `feature/chestny-znak-marking`
-  и разошёлся с master (в master — `196939b` безопасный dry-run + `775fc22` скрипт; в проде — `2acf665`
-  возвраты/Halyk/WB). Слито в master (чисто, `ozon_sync.py` не конфликтует). **Осталось (помощник):**
-  перевести `/opt/seo-bot` на master (`git checkout master`; app-update.timer делает `reset --hard
-  origin/<текущая ветка>` каждые 5 мин, так что после checkout master прод держится на master) + рестарт
-  `seo_bot`/`seo_web`. Флаг НЕ включать — только после проверки кодов на живом заказе.
+- **Ветки маркетплейсов сведены на master (02.09, `b0e42b4`) — ЗАДЕПЛОЕНО:** прод сидел на
+  `feature/chestny-znak-marking` и разошёлся с master (в master — `196939b` безопасный dry-run + `775fc22`
+  скрипт; в проде — `2acf665` возвраты/Halyk/WB). Слито в master (чисто, `ozon_sync.py` не конфликтует).
+  Прод `/opt/seo-bot` **на master @ b0e42b4**, `seo_bot`/`seo_web` перезапущены (18:34 UTC), проверки
+  зелёные (`:8501`→307→/login — это норм, редирект неавторизованного). Юниты: `seo_bot.service`,
+  `seo_web.service`. `cosmex-app-update` держит прод на master (берёт текущую ветку). Точка отката —
+  `feature/chestny-znak-marking @ 2acf665`. Флаг `MARKING_CODES_ENABLED` в `.env` НЕТ — включать только
+  после верных `[DRY]`-строк на живом заказе.
   ⚠️ Прод-приложение НЕ авто-обновляется как гвард (HTTPS-remote с read-only PAT, `git pull` тянет
   текущую ветку) — можно позже настроить авто-деплой master (deploy-ключ + таймер), по желанию.
+  ⚠️ Замечено при деплое: `fetch-probe-*.service (failed)` с `git fetch … feature/chestny-znak-marking`
+  и `cosmex-app-update` в `activating` — проверить, не хардкожена ли где старая ветка (иначе безвредно).
 
 ## Runtime CLI (гвард)
 
