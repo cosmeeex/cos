@@ -434,17 +434,46 @@ export function startServer(): void {
       ) {
         const raw = (url.searchParams.get("gtin") ?? "").trim();
         const q = (url.searchParams.get("q") ?? "").trim();
-        if (!q && !/^\d{8,14}$/.test(raw)) {
+        const doc = (url.searchParams.get("doc") ?? "").trim(); // <тип>:<id> или просто <id> (retaildemand)
+        if (!q && !doc && !/^\d{8,14}$/.test(raw)) {
           res.writeHead(400, { "Content-Type": "text/plain; charset=utf-8" })
-            .end("нужен gtin (8–14 цифр) или q (поиск по названию)");
+            .end("нужен gtin (8–14 цифр), q (название) или doc (<тип>:<id>)");
           return;
         }
         if (!ms) {
           res.writeHead(400).end("МойСклад не сконфигурирован");
           return;
         }
+        // Разбор документа: показать позиции с карточками, их штрихкодами и отсканир. кодами.
+        if (doc) {
+          const [t, i] = doc.includes(":") ? doc.split(":") : ["retaildemand", doc];
+          if (!/^[a-z]+$/.test(t) || !/^[0-9a-f-]{36}$/.test(i)) {
+            res.writeHead(400, { "Content-Type": "text/plain; charset=utf-8" }).end("doc: <тип>:<uuid>");
+            return;
+          }
+          try {
+            const d = await ms.document(t as never, i);
+            const positions = (d.positions?.rows ?? []).map((p) => {
+              const a = (p.assortment ?? {}) as Record<string, unknown>;
+              const bcs = ((a.barcodes as Array<Record<string, string>>) ?? [])
+                .map((b) => b.gtin ?? b.ean13 ?? b.ean8 ?? b.code128 ?? b.upc ?? "").filter(Boolean);
+              return {
+                name: String(a.name ?? ""),
+                article: String(a.article ?? a.code ?? ""),
+                barcodes: bcs,
+                scanned_codes: (p.trackingCodes ?? []).map((c) => c.cis),
+              };
+            });
+            res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" })
+              .end(JSON.stringify({ doc: `${t}:${i}`, name: d.name ?? "", positions }, null, 2));
+          } catch (e) {
+            res.writeHead(502, { "Content-Type": "text/plain; charset=utf-8" })
+              .end("ошибка запроса документа: " + String(e));
+          }
+          return;
+        }
         // По штрихкоду: один товар может храниться как GTIN-14 или EAN-13 (без ведущего 0).
-        // Плюс, если задан q — ищем по названию (search=).
+        // Плюс, если задан q — ищем по названию (filter=name~, т.к. search= ассортимент игнорирует).
         const queries: string[] = [];
         if (raw) {
           const variants = new Set<string>([raw, raw.replace(/^0+/, "")]);
@@ -452,7 +481,7 @@ export function startServer(): void {
           if (raw.length === 13) variants.add("0" + raw);
           for (const v of variants) queries.push(`filter=barcode=${encodeURIComponent(v)}`);
         }
-        if (q) queries.push(`search=${encodeURIComponent(q)}`);
+        if (q) queries.push(`filter=name~${encodeURIComponent(q)}`);
         const byHref = new Map<string, { name: string; article: string; type: string; barcodes: string[] }>();
         try {
           for (const qs of queries) {
