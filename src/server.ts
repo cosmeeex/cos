@@ -433,24 +433,31 @@ export function startServer(): void {
         cfg.server.webhookSecret
       ) {
         const raw = (url.searchParams.get("gtin") ?? "").trim();
-        if (!/^\d{8,14}$/.test(raw)) {
+        const q = (url.searchParams.get("q") ?? "").trim();
+        if (!q && !/^\d{8,14}$/.test(raw)) {
           res.writeHead(400, { "Content-Type": "text/plain; charset=utf-8" })
-            .end("gtin: 8–14 цифр");
+            .end("нужен gtin (8–14 цифр) или q (поиск по названию)");
           return;
         }
         if (!ms) {
           res.writeHead(400).end("МойСклад не сконфигурирован");
           return;
         }
-        // Один и тот же товар может храниться как GTIN-14 или EAN-13 (без ведущего 0).
-        const variants = new Set<string>([raw, raw.replace(/^0+/, "")]);
-        if (raw.length === 14 && raw.startsWith("0")) variants.add(raw.slice(1));
-        if (raw.length === 13) variants.add("0" + raw);
+        // По штрихкоду: один товар может храниться как GTIN-14 или EAN-13 (без ведущего 0).
+        // Плюс, если задан q — ищем по названию (search=).
+        const queries: string[] = [];
+        if (raw) {
+          const variants = new Set<string>([raw, raw.replace(/^0+/, "")]);
+          if (raw.length === 14 && raw.startsWith("0")) variants.add(raw.slice(1));
+          if (raw.length === 13) variants.add("0" + raw);
+          for (const v of variants) queries.push(`filter=barcode=${encodeURIComponent(v)}`);
+        }
+        if (q) queries.push(`search=${encodeURIComponent(q)}`);
         const byHref = new Map<string, { name: string; article: string; type: string; barcodes: string[] }>();
         try {
-          for (const v of variants) {
+          for (const qs of queries) {
             const page = await ms.http.get<{ rows: Array<Record<string, unknown>> }>(
-              `/entity/assortment?limit=20&filter=barcode=${encodeURIComponent(v)}`,
+              `/entity/assortment?limit=20&${qs}`,
             );
             for (const row of page.rows ?? []) {
               const meta = (row.meta ?? {}) as { href?: string; type?: string };
@@ -468,7 +475,7 @@ export function startServer(): void {
           }
           const found = [...byHref.values()];
           res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" })
-            .end(JSON.stringify({ gtin: raw, tried: [...variants], count: found.length, found }, null, 2));
+            .end(JSON.stringify({ gtin: raw || null, q: q || null, queries, count: found.length, found }, null, 2));
         } catch (e) {
           res.writeHead(502, { "Content-Type": "text/plain; charset=utf-8" })
             .end("ошибка запроса в МойСклад: " + String(e));
