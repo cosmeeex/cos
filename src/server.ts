@@ -423,6 +423,59 @@ export function startServer(): void {
         return;
       }
 
+      // Поиск товара по GTIN (для разбора алертов «код принадлежит другому товару»):
+      //   GET /webhook/telegram/{секрет}/gtin?gtin=<8..14 цифр>
+      // Ищет в ассортименте МойСклад по штрихкоду (пробует формы GTIN-14/EAN-13),
+      // возвращает найденные карточки: имя, артикул, тип, все штрихкоды. Только чтение.
+      if (
+        req.method === "GET" &&
+        url.pathname === `/webhook/telegram/${cfg.server.webhookSecret}/gtin` &&
+        cfg.server.webhookSecret
+      ) {
+        const raw = (url.searchParams.get("gtin") ?? "").trim();
+        if (!/^\d{8,14}$/.test(raw)) {
+          res.writeHead(400, { "Content-Type": "text/plain; charset=utf-8" })
+            .end("gtin: 8–14 цифр");
+          return;
+        }
+        if (!ms) {
+          res.writeHead(400).end("МойСклад не сконфигурирован");
+          return;
+        }
+        // Один и тот же товар может храниться как GTIN-14 или EAN-13 (без ведущего 0).
+        const variants = new Set<string>([raw, raw.replace(/^0+/, "")]);
+        if (raw.length === 14 && raw.startsWith("0")) variants.add(raw.slice(1));
+        if (raw.length === 13) variants.add("0" + raw);
+        const byHref = new Map<string, { name: string; article: string; type: string; barcodes: string[] }>();
+        try {
+          for (const v of variants) {
+            const page = await ms.http.get<{ rows: Array<Record<string, unknown>> }>(
+              `/entity/assortment?limit=20&filter=barcode=${encodeURIComponent(v)}`,
+            );
+            for (const row of page.rows ?? []) {
+              const meta = (row.meta ?? {}) as { href?: string; type?: string };
+              const href = meta.href ?? String(row.id ?? Math.random());
+              const bcs = ((row.barcodes as Array<Record<string, string>>) ?? [])
+                .map((b) => b.gtin ?? b.ean13 ?? b.ean8 ?? b.code128 ?? b.upc ?? "")
+                .filter(Boolean);
+              byHref.set(href, {
+                name: String(row.name ?? ""),
+                article: String(row.article ?? row.code ?? ""),
+                type: String(meta.type ?? ""),
+                barcodes: bcs,
+              });
+            }
+          }
+          const found = [...byHref.values()];
+          res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" })
+            .end(JSON.stringify({ gtin: raw, tried: [...variants], count: found.length, found }, null, 2));
+        } catch (e) {
+          res.writeHead(502, { "Content-Type": "text/plain; charset=utf-8" })
+            .end("ошибка запроса в МойСклад: " + String(e));
+        }
+        return;
+      }
+
       // Боевой DRY-RUN передачи кодов «Честный знак» в Ozon:
       //   POST /webhook/telegram/{секрет}/ozon-dryrun[?cab=<id>]
       // Путь под /webhook/telegram/, потому что nginx проксирует на гвард только
